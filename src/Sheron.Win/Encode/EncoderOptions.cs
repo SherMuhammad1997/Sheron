@@ -18,6 +18,7 @@ namespace Sheron.Win.Encode;
 /// <param name="CallerAllocatesOutput">Hand the encoder our own output sample even if it offers to provide one.</param>
 /// <param name="VorticeProcessOutput">Collect output through Vortice's ProcessOutput instead of the direct COM call.</param>
 /// <param name="AlignedInput">Memory input: allocate the frame buffer with the alignment the encoder asks for.</param>
+/// <param name="QualityVsSpeed">ICodecAPI AVEncCommonQualityVsSpeed, 0 (fastest) to 100 (best quality); -1 leaves it unset.</param>
 internal sealed record EncoderOptions(
     bool OfferedTypes = false,
     bool ColourAttributes = true,
@@ -30,7 +31,8 @@ internal sealed record EncoderOptions(
     uint Scenario = EncoderOptions.DisplayRemoting,
     bool CallerAllocatesOutput = false,
     bool VorticeProcessOutput = false,
-    bool AlignedInput = false)
+    bool AlignedInput = false,
+    int QualityVsSpeed = 0)
 {
     /// <summary>eAVScenarioInfo_DisplayRemoting (codecapi.h).</summary>
     public const uint DisplayRemoting = 1;
@@ -39,5 +41,6 @@ internal sealed record EncoderOptions(
 
     /// <summary>Nothing beyond size, frame rate, profile and bitrate.</summary>
     public static readonly EncoderOptions Bare = new(OfferedTypes: false, ColourAttributes: false, NoBFrames: false,
-        LowLatency: false, ConstantBitrate: false, KeyFrameInterval: false, LowLatencyAttribute: false, Scenario: 0);
+        LowLatency: false, ConstantBitrate: false, KeyFrameInterval: false, LowLatencyAttribute: false, Scenario: 0,
+        QualityVsSpeed: -1);
 }

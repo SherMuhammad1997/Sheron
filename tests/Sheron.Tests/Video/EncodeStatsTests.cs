@@ -35,6 +35,19 @@ public class EncodeStatsTests
     }
 
     [Fact]
+    public void The_encoders_own_time_is_averaged_separately()
+    {
+        var stats = new EncodeStats();
+        stats.AddFrame(Ms(0), encodeMs: 9.0, bytes: 100, keyFrame: false, encoderOwnMs: 3.0);
+        stats.AddFrame(Ms(16), encodeMs: 9.0, bytes: 100, keyFrame: false, encoderOwnMs: 5.0);
+
+        var snapshot = stats.Snapshot(Ms(20));
+
+        Assert.Equal(9.0, snapshot.AverageEncodeMs);
+        Assert.Equal(4.0, snapshot.AverageEncoderOwnMs);
+    }
+
+    [Fact]
     public void No_frames_reads_as_zero()
     {
         Assert.Equal(default, new EncodeStats().Snapshot(Ms(0)));

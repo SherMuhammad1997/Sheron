@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using SharpGen.Runtime;
 using Sheron.Core.Video;
@@ -19,8 +20,11 @@ internal enum EncoderKind
     Software,
 }
 
-/// <summary>One encoded H.264 frame in Annex B form (with start codes).</summary>
-internal sealed record EncodedFrame(byte[] Data, bool KeyFrame);
+/// <summary>
+/// One encoded H.264 frame in Annex B form (with start codes). <paramref name="EncoderOwnMs"/> is the encoder's own
+/// part: from the frame going in to the output being ready.
+/// </summary>
+internal sealed record EncodedFrame(byte[] Data, bool KeyFrame, double EncoderOwnMs = 0);
 
 /// <summary>
 /// One H.264 encoder: a Media Foundation transform (TRD › Video path). The software encoder answers at once on the
@@ -215,8 +219,9 @@ internal sealed class H264Encoder : IDisposable
         }
         else
         {
+            long inputAt = Stopwatch.GetTimestamp();
             using (sample) _transform.ProcessInput(_inputStreamId, sample, 0);
-            while (ReadOutput(frames)) { }
+            while (ReadOutput(frames, Stopwatch.GetElapsedTime(inputAt).TotalMilliseconds)) { }
         }
 
         if (frames.Count == 0) HeldBack++;
@@ -229,6 +234,7 @@ internal sealed class H264Encoder : IDisposable
     /// </summary>
     private void RunWorker()
     {
+        long lastInputAt = Stopwatch.GetTimestamp();
         try
         {
             while (!_stopping.IsCancellationRequested)
@@ -259,12 +265,14 @@ internal sealed class H264Encoder : IDisposable
                         {
                             return;
                         }
+                        long inputAt = Stopwatch.GetTimestamp();
                         using (sample) _transform.ProcessInput(_inputStreamId, sample, 0);
+                        lastInputAt = inputAt;
                         break;
 
                     case MediaEventTypes.TransformHaveOutput:
                         var frames = new List<EncodedFrame>(1);
-                        ReadOutput(frames);
+                        ReadOutput(frames, Stopwatch.GetElapsedTime(lastInputAt).TotalMilliseconds);
                         foreach (var frame in frames) _outbox.Add(frame);
                         break;
                 }
@@ -464,9 +472,10 @@ internal sealed class H264Encoder : IDisposable
     /// Calls ProcessOutput once (more after a format change). Returns false when the encoder has nothing yet.
     /// Called through the vtable so we own exactly the sample reference the encoder hands back.
     /// </summary>
-    private unsafe bool ReadOutput(List<EncodedFrame> frames)
+    /// <param name="encoderOwnMs">The encoder's own time for this output, recorded with the frame.</param>
+    private unsafe bool ReadOutput(List<EncodedFrame> frames, double encoderOwnMs)
     {
-        if (_options.VorticeProcessOutput) return ReadOutputThroughVortice(frames);
+        if (_options.VorticeProcessOutput) return ReadOutputThroughVortice(frames, encoderOwnMs);
         var processOutput = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, NativeOutputDataBuffer*, uint*, int>)
             (*(IntPtr**)_transform.NativePointer)[ProcessOutputSlot];
         while (true)
@@ -495,18 +504,18 @@ internal sealed class H264Encoder : IDisposable
             if (_providesSamples)
             {
                 using var sample = new IMFSample(output.Sample);
-                frames.Add(ToFrame(sample));
+                frames.Add(ToFrame(sample) with { EncoderOwnMs = encoderOwnMs });
             }
             else
             {
-                frames.Add(ToFrame(_outputSample!));
+                frames.Add(ToFrame(_outputSample!) with { EncoderOwnMs = encoderOwnMs });
             }
             return true;
         }
     }
 
     /// <summary>The same as <see cref="ReadOutput"/>, through Vortice's wrapper (settings check only).</summary>
-    private bool ReadOutputThroughVortice(List<EncodedFrame> frames)
+    private bool ReadOutputThroughVortice(List<EncodedFrame> frames, double encoderOwnMs)
     {
         while (true)
         {
@@ -522,7 +531,7 @@ internal sealed class H264Encoder : IDisposable
                 _transform.SetOutputType(_outputStreamId, type, 0);
                 continue;
             }
-            frames.Add(ToFrame(output.Sample));
+            frames.Add(ToFrame(output.Sample) with { EncoderOwnMs = encoderOwnMs });
             if (_providesSamples) output.Sample.Dispose();
             return true;
         }

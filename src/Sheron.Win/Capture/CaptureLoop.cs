@@ -221,7 +221,7 @@ internal sealed class CaptureLoop : IDisposable
             var frames = _encoder.Encode(_converter.Convert(frame), at);
             double ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             foreach (var encoded in frames)
-                _encodeStats.AddFrame(at, ms, encoded.Data.Length, encoded.KeyFrame);
+                _encodeStats.AddFrame(at, ms, encoded.Data.Length, encoded.KeyFrame, encoded.EncoderOwnMs);
             lock (_lock) _heldBack = _encoder.HeldBack;
         }
         catch (Exception error)
