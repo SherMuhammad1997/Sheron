@@ -50,6 +50,10 @@ While video runs, Sheron asks Windows for a 1 ms timer (`timeBeginPeriod`) and o
 
 Measured on Sher's laptop, 25 Oct (Intel Graphics, 1920 × 1200 at 60 Hz): capture 60 fps, 0.15 ms average and 0.22 ms max per frame; Sheron CPU 0.0 % on a still screen and 0.4 % while capturing 60 fps.
 
+Measured 25 Oct, Intel Quick Sync through Media Foundation (GPU input, 60 fps, 8 Mbps): encoder's own time at least 6.5 ms in every setting, 7.7–8.5 ms on average once warm; round trip 8–9 ms; CPU 0.7 %. The fastest preset made no difference. Memory input: 6.0 ms minimum inside the encoder but 13.3 ms round trip (CPU copy).
+
+**Intel route (Plan step 4b):** on Intel GPUs, encode through Intel oneVPL instead: the D3D11 device is handed to oneVPL, the captured frame stays on the GPU, low-power encoding (VDEnc), target usage 7 (fastest), async depth 1, no B-frames, low-delay rate control. Media Foundation stays the route for NVIDIA and AMD, and the fallback when oneVPL is missing or fails.
+
 ## Automatic quality
 
 | Rule | Detail |
@@ -133,6 +137,7 @@ Measured on Sher's laptop, 25 Oct (Intel Graphics, 1920 × 1200 at 60 Hz): captu
 | Component | Licence | Use |
 | --- | --- | --- |
 | Vortice.Windows (Direct3D11, DXGI, MediaFoundation), 3.8.3 | MIT | Capture, encode, decode and render interop. Brings Vortice.DirectX, Vortice.Mathematics, SharpGen.Runtime, SharpGen.Runtime.COM and System.Text.Json (all MIT) |
+| Intel oneVPL dispatcher (libvpl) | MIT | Intel hardware encoder route (Plan step 4b, approved 25 Oct). The encoder itself (the GPU runtime) comes with the Intel graphics driver; nothing of Intel's is copied into our code |
 | Serilog, Serilog.Sinks.File | Apache-2.0 | Logs |
 | xUnit, xunit.runner.visualstudio, Microsoft.NET.Test.Sdk | Apache-2.0 / MIT | Tests |
 | IBM Plex Sans / Mono fonts | SIL OFL 1.1 | Bundled fonts |

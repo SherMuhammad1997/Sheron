@@ -4,12 +4,12 @@ Oct 25, 2026 · @Sher Muhammad
 
 ## How the build runs
 
-The build is 21 steps in 5 phases. A fast picture on one PC comes first: if the speed targets fail there, nothing else matters. This is document 3 of 3; no dates are set.
+The build is 21 steps in 5 phases, plus step 4b (added 25 Oct). A fast picture on one PC comes first: if the speed targets fail there, nothing else matters. This is document 3 of 3; no dates are set.
 
 ```text
 Phase 0  Repository and solution             steps 1-2
    v
-Phase 1  Fast picture on one PC              steps 3-5
+Phase 1  Fast picture on one PC              steps 3-5 (with 4b)
    v
 GATE 1: capture -> encode -> decode -> display <= 25 ms on one PC
    v
@@ -48,6 +48,7 @@ GATE 4: all 11 PRD acceptance checks pass
 | --- | --- | --- |
 | 3 | Screen capture with DXGI Desktop Duplication: changed areas, pointer shape and position; a debug window shows capture fps and time per frame | 60 fps capture; ≤ 1 % CPU on a still screen |
 | 4 | H.264 encoder through Media Foundation: hardware first, software fallback, low-latency settings; the debug window shows the encoder name and time per frame | 1080p frame encodes in ≤ 5 ms on a hardware encoder |
+| 4b | Intel route through oneVPL (added 25 Oct, PRD decision): libvpl dispatcher, D3D11 frames, low-power encoding, fastest target usage; Media Foundation stays the fallback | Encoder's own time ≤ 5 ms average at 1920 × 1200, 60 fps, on Sher's PC |
 | 5 | Decoder and Direct3D 11 renderer in a loop on the same PC, pointer drawn locally; capture-to-display timer | Loop shows the screen; timer ≤ 25 ms |
 
 ## Phase 2 — Two PCs on the same network (Gate 2)

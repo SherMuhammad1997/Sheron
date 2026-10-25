@@ -78,6 +78,7 @@ File transfer, clipboard sync, chat, sound, session recording, more than one mon
 | 25 Oct | #2 Server: Alibaba Cloud Hong Kong (best route in the 25 Oct test) |
 | 25 Oct | Unattended access (F5) is in version 1 |
 | 25 Oct | Version 1 shows the main monitor only; no file transfer or clipboard |
+| 25 Oct | Encoder target stays ≤ 5 ms per frame. Intel GPUs get their own route through Intel oneVPL (Plan step 4b), because Intel's Media Foundation encoder cannot go below about 6.5 ms at 1920 × 1200 |
 
 ## Decisions still open — ask Sher
 
