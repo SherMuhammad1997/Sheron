@@ -34,12 +34,14 @@ Language: C# 12, .NET 8. `global.json` accepts any .NET 8 SDK from 8.0.100 up. T
 
 | Stage | How | Time budget |
 | --- | --- | --- |
-| Capture | DXGI Desktop Duplication. Only the changed areas; pointer shape and position read separately | 1–5 ms |
+| Capture | DXGI Desktop Duplication of the main monitor (the one at desktop position 0, 0), on that monitor's own graphics adapter (needed on laptops with two GPUs). Each frame is copied to a GPU texture for the encoder; changed areas, pointer shape and position read separately | 1–5 ms |
 | Encode | H.264 through Media Foundation. Hardware encoder first (NVIDIA, Intel, AMD); Microsoft software encoder if none. Low-latency mode, no B-frames, queue of 1 frame | 2–5 ms (hardware) |
 | Packets | Packets of ≤ 1,200 bytes; extra FEC packets, more when loss rises; a new keyframe only when the viewer asks after loss | < 1 ms |
 | Encrypt | AES-256-GCM | < 1 ms |
 | Viewer | Jitter buffer 0–100 ms that adapts to the link; hardware decode (Media Foundation / DXVA); Direct3D 11 flip-model swap chain; pointer drawn on the viewer | 2–5 ms + buffer |
 | Still screen | No change → no video packets, only a keep-alive | ≈ 0 |
+
+Capture test window (developer only, Plan step 3): `Sheron.Win.exe --capture-test` shows capture fps, time per frame, changed area, pointer and Sheron's own CPU use.
 
 ## Automatic quality
 
@@ -115,6 +117,7 @@ Language: C# 12, .NET 8. `global.json` accepts any .NET 8 SDK from 8.0.100 up. T
 | --- | --- |
 | Toolkit | WinForms, custom-painted. Keep native controls few: Sher's PC runs window-hooking software that costs about 40 ms per control. Real controls only for text boxes and dropdowns |
 | Video | The session window draws video with Direct3D 11 in one child window |
+| DPI | Per-monitor DPI aware (PerMonitorV2), so capture, pointer and input all use real screen pixels |
 | Style | Control Room (PRD decision #1): background #0E141B, panels #151E28, lines #243142, text #E6EDF3, muted #9FB0C3, accent amber #F2A93B, green #3FB871, red #E5534B. IBM Plex Sans / Mono, bundled |
 | Screens | Home, session window, incoming request, banner, settings — see `docs/design/` |
 
@@ -122,7 +125,7 @@ Language: C# 12, .NET 8. `global.json` accepts any .NET 8 SDK from 8.0.100 up. T
 
 | Component | Licence | Use |
 | --- | --- | --- |
-| Vortice.Windows (Direct3D11, DXGI, MediaFoundation) | MIT | Capture, encode, decode and render interop |
+| Vortice.Windows (Direct3D11, DXGI, MediaFoundation), 3.8.3 | MIT | Capture, encode, decode and render interop. Brings Vortice.DirectX, Vortice.Mathematics, SharpGen.Runtime, SharpGen.Runtime.COM and System.Text.Json (all MIT) |
 | Serilog, Serilog.Sinks.File | Apache-2.0 | Logs |
 | xUnit, xunit.runner.visualstudio, Microsoft.NET.Test.Sdk | Apache-2.0 / MIT | Tests |
 | IBM Plex Sans / Mono fonts | SIL OFL 1.1 | Bundled fonts |

@@ -2,9 +2,11 @@
 
 Simple, fast remote desktop for Windows. Connect to any PC in the world with a 9-digit ID and a password, see its screen and control it.
 
-Status: Implementation Plan step 2 (empty .NET solution) done.
+Status: Implementation Plan step 3 (screen capture) built; waiting for the check on Sher's PC.
 
 Build and test: `dotnet build Sheron.sln` and `dotnet test Sheron.sln` (.NET 8 SDK).
+
+Capture test window (Plan step 3): `dotnet run --project src/Sheron.Win -- --capture-test`
 
 | Document | What it covers |
 | --- | --- |

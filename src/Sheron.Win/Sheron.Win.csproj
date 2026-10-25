@@ -10,12 +10,20 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Real screen pixels for capture, pointer and input (TRD › Windows UI). -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <!-- Lets the Linux cloud sessions build this project too (TRD › Projects). -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Sheron.Win.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Vortice.Windows 3.8.3, MIT (TRD › Third-party components). -->
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
   </ItemGroup>
 
 </Project>
