@@ -35,13 +35,16 @@ Language: C# 12, .NET 8. `global.json` accepts any .NET 8 SDK from 8.0.100 up. T
 | Stage | How | Time budget |
 | --- | --- | --- |
 | Capture | DXGI Desktop Duplication of the main monitor (the one at desktop position 0, 0), on that monitor's own graphics adapter (needed on laptops with two GPUs). Each frame is copied to a GPU texture for the encoder; changed areas, pointer shape and position read separately | 1–5 ms |
-| Encode | H.264 through Media Foundation. Hardware encoder first (NVIDIA, Intel, AMD); Microsoft software encoder if none. Low-latency mode, no B-frames, queue of 1 frame | 2–5 ms (hardware) |
+| Colour | BGRA → NV12 on the GPU with the Direct3D 11 video processor (BT.709, 16–235), into a pool of 3 NV12 textures | < 0.1 ms CPU |
+| Encode | H.264 through Media Foundation. Hardware encoder first (NVIDIA, Intel, AMD), fed the NV12 GPU texture directly and driven by its events; Microsoft software encoder if none, fed a CPU copy. Low-latency mode, constant bitrate 8 Mbps, no B-frames, Main profile, keyframe every 300 frames (later: on request). Encoder settings go through the documented Windows `ICodecAPI` interface, declared in our own code | 2–5 ms (hardware) |
 | Packets | Packets of ≤ 1,200 bytes; extra FEC packets, more when loss rises; a new keyframe only when the viewer asks after loss | < 1 ms |
 | Encrypt | AES-256-GCM | < 1 ms |
 | Viewer | Jitter buffer 0–100 ms that adapts to the link; hardware decode (Media Foundation / DXVA); Direct3D 11 flip-model swap chain; pointer drawn on the viewer | 2–5 ms + buffer |
 | Still screen | No change → no video packets, only a keep-alive | ≈ 0 |
 
-Capture test window (developer only, Plan step 3): `Sheron.Win.exe --capture-test` shows capture fps, time per frame, changed area, pointer and Sheron's own CPU use.
+Capture test window (developer only, Plan steps 3–4): `Sheron.Win.exe --capture-test` shows capture fps, time per frame, changed area, pointer, the encoder, encode time, bitrate and Sheron's own CPU use. Add `--software-encoder` to skip the hardware encoder.
+
+The capture device is made with BGRA and video support and is multithread-protected, because the hardware encoder uses it from its own threads.
 
 Measured on Sher's laptop, 25 Oct (Intel Graphics, 1920 × 1200 at 60 Hz): capture 60 fps, 0.15 ms average and 0.22 ms max per frame; Sheron CPU 0.0 % on a still screen and 0.4 % while capturing 60 fps.
 

@@ -80,6 +80,10 @@ internal sealed class DesktopDuplicator : IDisposable
     public int Width { get; }
     public int Height { get; }
 
+    /// <summary>The device the frames live on; the converter and encoder use it too.</summary>
+    public ID3D11Device Device => _device;
+    public ID3D11DeviceContext Context => _context;
+
     /// <summary>The latest desktop image, kept on the GPU. Null until the first new frame.</summary>
     public ID3D11Texture2D? Frame => _frame;
 
@@ -111,8 +115,15 @@ internal sealed class DesktopDuplicator : IDisposable
         ID3D11DeviceContext? context = null;
         try
         {
-            D3D11.D3D11CreateDevice(adapter, DriverType.Unknown, DeviceCreationFlags.BgraSupport, FeatureLevels,
-                out device, out context).CheckError();
+            // Video support lets the GPU convert colours for the encoder; without it only capture works.
+            var created = D3D11.D3D11CreateDevice(adapter, DriverType.Unknown,
+                DeviceCreationFlags.BgraSupport | DeviceCreationFlags.VideoSupport, FeatureLevels, out device, out context);
+            if (created.Failure)
+                D3D11.D3D11CreateDevice(adapter, DriverType.Unknown, DeviceCreationFlags.BgraSupport, FeatureLevels,
+                    out device, out context).CheckError();
+            // A hardware encoder uses the device from its own threads (TRD › Video path).
+            using (var multithread = context!.QueryInterfaceOrNull<ID3D11Multithread>())
+                multithread?.SetMultithreadProtected(true);
             using var output1 = output.QueryInterface<IDXGIOutput1>();
             var duplication = output1.DuplicateOutput(device);
             return new DesktopDuplicator(adapter, output, device!, context!, duplication);

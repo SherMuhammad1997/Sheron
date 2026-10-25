@@ -2,11 +2,11 @@
 
 Simple, fast remote desktop for Windows. Connect to any PC in the world with a 9-digit ID and a password, see its screen and control it.
 
-Status: Implementation Plan step 3 (screen capture) done; next is step 4 (H.264 encoder).
+Status: Implementation Plan step 4 (H.264 encoder) built; waiting for the check on Sher's PC.
 
 Build and test: `dotnet build Sheron.sln` and `dotnet test Sheron.sln` (.NET 8 SDK).
 
-Capture test window (Plan step 3): `dotnet run --project src/Sheron.Win -- --capture-test`
+Capture and encoder test window (Plan steps 3–4): `dotnet run --project src/Sheron.Win -- --capture-test` (add `--software-encoder` to skip the hardware encoder)
 
 | Document | What it covers |
 | --- | --- |
