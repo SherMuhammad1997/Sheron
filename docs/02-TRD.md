@@ -43,6 +43,8 @@ Language: C# 12, .NET 8. `global.json` accepts any .NET 8 SDK from 8.0.100 up. T
 
 Capture test window (developer only, Plan step 3): `Sheron.Win.exe --capture-test` shows capture fps, time per frame, changed area, pointer and Sheron's own CPU use.
 
+Measured on Sher's laptop, 25 Oct (Intel Graphics, 1920 × 1200 at 60 Hz): capture 60 fps, 0.15 ms average and 0.22 ms max per frame; Sheron CPU 0.0 % on a still screen and 0.4 % while capturing 60 fps.
+
 ## Automatic quality
 
 | Rule | Detail |
