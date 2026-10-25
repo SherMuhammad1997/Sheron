@@ -1,0 +1,11 @@
+# .NET / Visual Studio
+bin/
+obj/
+.vs/
+*.user
+*.suo
+TestResults/
+
+# Installer output
+installer/publish/
+installer/output/

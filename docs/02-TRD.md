@@ -1,0 +1,176 @@
+# Sheron – Technical Requirements (TRD)
+
+Oct 25, 2026 · @Sher Muhammad
+
+## How it fits together
+
+```text
+ Viewer PC  (Sheron.exe)                        Remote PC  (Sheron.exe + Sheron Service)
+   decode -> draw -> pointer drawn here   <-- video --   capture -> encode
+   mouse + keyboard  ---------- input ---------------->  SendInput
+          \                                               /
+           \-- TLS, TCP 443: find ID, signalling --+-- TLS, TCP 443: stays online --/
+                                                   |
+                                     Sheron Server (Hong Kong)
+                           relay on UDP 443 or TCP 443, used only if the direct link fails
+```
+
+This is document 2 of 3. The drawing is also on the design canvas (board 5).
+
+## Projects
+
+| Project | Target | Contents |
+| --- | --- | --- |
+| `src/Sheron.Core` | net8.0 | Protocol, packets, error correction (FEC), encryption handshake, quality control, jitter buffer. No Windows code |
+| `src/Sheron.Win` | net8.0-windows | WinForms app, screen capture, encoder, decoder, renderer, input, Windows service |
+| `src/Sheron.Server` | net8.0 (Linux) | ID registry, signalling, address check, relay |
+| `src/Sheron.Sim` | net8.0 | Bad-network simulator (delay, jitter, loss, UDP blocked) used by tests and by hand |
+| `tests/Sheron.Tests` | net8.0-windows | xUnit tests |
+
+Language: C# 12, .NET 8.
+
+## Video path (remote PC → viewer)
+
+| Stage | How | Time budget |
+| --- | --- | --- |
+| Capture | DXGI Desktop Duplication. Only the changed areas; pointer shape and position read separately | 1–5 ms |
+| Encode | H.264 through Media Foundation. Hardware encoder first (NVIDIA, Intel, AMD); Microsoft software encoder if none. Low-latency mode, no B-frames, queue of 1 frame | 2–5 ms (hardware) |
+| Packets | Packets of ≤ 1,200 bytes; extra FEC packets, more when loss rises; a new keyframe only when the viewer asks after loss | < 1 ms |
+| Encrypt | AES-256-GCM | < 1 ms |
+| Viewer | Jitter buffer 0–100 ms that adapts to the link; hardware decode (Media Foundation / DXVA); Direct3D 11 flip-model swap chain; pointer drawn on the viewer | 2–5 ms + buffer |
+| Still screen | No change → no video packets, only a keep-alive | ≈ 0 |
+
+## Automatic quality
+
+| Rule | Detail |
+| --- | --- |
+| Measure | Every 250 ms: round trip, loss, received rate |
+| Step down | Delay rising or loss > 2 % → lower bitrate; then fps (60 → 30 → 15); then picture size (100 → 75 → 50 %) |
+| Step up | Link stable for 2 s → one step back up |
+| CPU guard | Sheron above 10 % CPU on the remote PC for 5 s → lower fps, then size |
+| Quality menu | Auto (default) · Best speed (low delay first) · Best picture (sharp text first, fps may drop) |
+
+## Input path
+
+| Item | Detail |
+| --- | --- |
+| Keys | Sent as scan codes, so keyboard layouts work |
+| Mouse | Absolute position scaled to 0–65535, buttons and wheel |
+| Channel | Ordered and reliable, sent ahead of video |
+| Remote side | `SendInput` |
+| Ctrl+Alt+Del | `SendSAS` from the service; the installer sets the Windows policy that allows a software Secure Attention Sequence |
+| Pointer | Remote PC sends the shape when it changes, then positions; the viewer draws it |
+
+## Network
+
+| Item | Detail |
+| --- | --- |
+| Server | One server to start: Alibaba Cloud Hong Kong (PRD open decision 2). More regions later |
+| Stay online | Each PC keeps a TLS 1.3 connection to the server on TCP 443; heartbeat every 25 s |
+| Connect | Viewer asks the server for the ID; the server tells both sides each other's addresses (LAN and public) |
+| Direct link | Both sides send UDP probes to each other at the same time for up to 1.5 s (hole punching). A LAN address wins when both are on the same network |
+| Relay | If direct fails: UDP 443 through the server. If UDP is blocked: TCP 443 (TLS) through the server |
+| Reconnect | Link lost → try direct and relay at the same time; target ≤ 5 s |
+| Packet size | ≤ 1,200 bytes, so packets fit through VPNs and mobile links |
+| Later | Relays in Europe and the US; the server picks the closest relay by measured delay |
+
+## Default ports (all configurable)
+
+| Port | Where | Use |
+| --- | --- | --- |
+| TCP 443 | Server | Signalling (TLS) and the TCP relay fallback |
+| UDP 443 | Server | Address check and UDP relay |
+| UDP, chosen by Windows | Both PCs | Direct link |
+
+## Security
+
+| Item | Rule |
+| --- | --- |
+| Device key | Each install makes an ECDSA P-256 key pair; the private key is protected with DPAPI (machine scope, so the service can use it) |
+| ID | The server gives a 9-digit ID tied to the device's public key |
+| Key pinning | The viewer remembers the remote PC's key fingerprint on first connect and warns if it ever changes |
+| Session keys | New ECDH P-256 key per session, signed by both device keys; HKDF-SHA256 → AES-256-GCM, one key per direction; counter nonces; replay window |
+| End to end | The server only sees sealed packets and never has the session keys |
+| Server link | TLS 1.3; the server's certificate key is pinned in the app |
+| One-time password | 8 characters from a 32-character set with no look-alikes (no 0/O, 1/I/L); new after every session |
+| Fixed password | PBKDF2-SHA256, 600,000 rounds, 16-byte salt; only the hash is stored |
+| Password check | Only inside the encrypted channel |
+| Wrong password | 3 tries → 30 s lock on that ID; the server also limits tries |
+| Consent | Without a fixed password the person at the remote PC must Accept. The banner is always shown. There is no hidden or silent mode |
+| Logs | Never log passwords, keys or screen content |
+
+## Unattended access (Windows service)
+
+| Item | Detail |
+| --- | --- |
+| Service | "Sheron Service" runs as LocalSystem and starts with Windows |
+| Agent | The service starts the Sheron agent in the active console session (`WTSGetActiveConsoleSessionId`, `CreateProcessAsUser`), so it can see the lock screen and UAC prompts |
+| Desktop switch | The agent follows desktop changes (`OpenInputDesktop`, `SetThreadDesktop`), so capture and input keep working across the lock screen and UAC |
+| User switch | When the active session changes, the service restarts the agent in the new session |
+
+## Windows UI
+
+| Item | Rule |
+| --- | --- |
+| Toolkit | WinForms, custom-painted. Keep native controls few: Sher's PC runs window-hooking software that costs about 40 ms per control. Real controls only for text boxes and dropdowns |
+| Video | The session window draws video with Direct3D 11 in one child window |
+| Style | Control Room (proposed): background #0E141B, panels #151E28, lines #243142, text #E6EDF3, muted #9FB0C3, accent amber #F2A93B, green #3FB871, red #E5534B. IBM Plex Sans / Mono, bundled |
+| Screens | Home, session window, incoming request, banner, settings — see `docs/design/` |
+
+## Third-party components (only these are approved)
+
+| Component | Licence | Use |
+| --- | --- | --- |
+| Vortice.Windows (Direct3D11, DXGI, MediaFoundation) | MIT | Capture, encode, decode and render interop |
+| Serilog, Serilog.Sinks.File | Apache-2.0 | Logs |
+| xUnit, xunit.runner.visualstudio, Microsoft.NET.Test.Sdk | Apache-2.0 / MIT | Tests |
+| IBM Plex Sans / Mono fonts | SIL OFL 1.1 | Bundled fonts |
+
+Everything else uses .NET 8 built-ins (`SslStream`, `AesGcm`, `ECDiffieHellman`, `ECDsa`, `HKDF`, `Rfc2898DeriveBytes`) and Windows APIs.
+
+**Not allowed:** GPL, AGPL or LGPL code (for example RustDesk, FFmpeg, x264, TightVNC, UltraVNC), and copying any other remote-desktop product's code, protocol, name or look.
+
+## Files
+
+| Item | Where |
+| --- | --- |
+| Logs | `%ProgramData%\Sheron\logs\`, one file a day, kept 14 days (Serilog) |
+| Settings | `%ProgramData%\Sheron\settings.json` (no secrets) |
+| Secrets | `%ProgramData%\Sheron\secrets.bin` (DPAPI): device private key, fixed-password hash |
+| Recent list | `%AppData%\Sheron\recent.json` (per Windows user) |
+| Server | `/opt/sheron-server`, systemd unit `sheron-server`, logs to journald |
+
+## Server
+
+| Item | Detail |
+| --- | --- |
+| Machine | Ubuntu 24.04 LTS, 2 vCPU, 2 GB RAM to start |
+| Stores | ID ↔ public key and last-seen time, in one small file. No passwords, no screen data |
+| Bandwidth | A relayed session uses about 0.3–2 Mbps; 100 Mbps carries about 50–100 relayed sessions at once. Direct links cost the server nothing |
+| Limits | Connect attempts limited per IP address and per ID |
+
+## Risks
+
+| # | Risk | What we do |
+| --- | --- | --- |
+| R1 | Hardware encoders differ between NVIDIA, Intel and AMD; some ignore low-latency settings | Test all three; software encoder as fallback |
+| R2 | Antivirus and SmartScreen block unsigned remote-control apps | Code-signing certificate (PRD open decision 5) |
+| R3 | China cross-border links slow down UDP | TCP 443 fallback; relay in Hong Kong |
+| R4 | Mobile data jitter (66–100 ms in the 25 Oct test) | Adaptive jitter buffer and quality |
+| R5 | Misuse by scammers | Consent prompt, banner that cannot be hidden, no silent mode |
+| R6 | Relay bandwidth cost | Direct link first; relay only when needed |
+| R7 | Ctrl+Alt+Del needs the service and a Windows policy | Installer sets the policy; tested in step 17 |
+
+## Measured network — 25 Oct 2026
+
+Sher's laptop on an iPhone hotspot (mobile data); TCP connect time to port 443, 20 tries each.
+
+| Place | Min | Average | Max | Jitter | Failed |
+| --- | --- | --- | --- | --- | --- |
+| Singapore (Alibaba) | 99 ms | 202 ms | 581 ms | 72 ms | 0 % |
+| Hong Kong (Alibaba) | 142 ms | 227 ms | 555 ms | 98 ms | 0 % |
+| Hong Kong (AWS) | 218 ms | 295 ms | 625 ms | 66 ms | 0 % |
+| Shenzhen (Alibaba) | 312 ms | 382 ms | 652 ms | 90 ms | 0 % |
+| Guangzhou (Tencent) | 407 ms | 505 ms | 724 ms | 100 ms | 0 % |
+
+Laptop to phone over Wi-Fi: 1–3 ms, 0 % loss, so the jitter comes from the mobile network. A repeat on a fixed line is still to do.

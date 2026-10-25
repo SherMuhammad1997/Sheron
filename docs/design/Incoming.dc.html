@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sheron on the remote PC</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E141B}
+a{color:#F2A93B}a:hover{color:#FFC56B}
+button:focus-visible{outline:2px solid #F2A93B;outline-offset:2px}
+</style>
+</helmet>
+<div style="width: 1280px; height: 560px; box-sizing: border-box; padding: 48px; background: #0E141B; color: #E6EDF3; font-family: 'IBM Plex Sans', system-ui, sans-serif; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 48px">
+<div style="display: flex; flex-direction: column; gap: 16px; min-width: 0">
+<p style="margin: 0; font-size: 15px; color: #9FB0C3"><b style="color: #E6EDF3">1</b> · Someone asks to connect</p>
+<div style="position: relative; flex: 1; background: #22303F; border: 1px solid #243142; border-radius: 10px; overflow: hidden; display: flex; align-items: center; justify-content: center">
+<div style="position: relative; width: 400px; box-sizing: border-box; background: #151E28; border: 1px solid #3A4A5E; border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 16px 40px rgba(0,0,0,0.45)">
+<div style="display: flex; align-items: center; gap: 14px">
+<span style="width: 44px; height: 44px; flex: none; border-radius: 50%; background: #2A2113; display: inline-flex; align-items: center; justify-content: center; color: {{accent}}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"></rect><path d="M8 20h8"></path><path d="M12 16v4"></path></svg></span>
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+<span style="font-size: 17px; line-height: 23px"><b>Sher-Laptop</b> wants to control this PC</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #9FB0C3">ID 731 204 889</span>
+</div>
+</div>
+<p style="margin: 0; font-size: 14px; line-height: 21px; color: #9FB0C3">They will see your screen and use your mouse and keyboard.</p>
+<div style="display: flex; gap: 12px">
+<button style="flex: 1; height: 44px; background: {{accent}}; border: none; border-radius: 8px; color: #0E141B; font: inherit; font-size: 15px; font-weight: 700; cursor: pointer">Accept</button>
+<button style="flex: 1; height: 44px; background: transparent; border: 1px solid #3A4A5E; border-radius: 8px; color: #E6EDF3; font: inherit; font-size: 15px; cursor: pointer">Deny</button>
+</div>
+<span style="font-size: 13px; color: #9FB0C3; text-align: center">Denies by itself in 28 s</span>
+</div>
+<div style="position: absolute; left: 0; right: 0; bottom: 0; height: 24px; background: #121A23"></div>
+</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 16px; min-width: 0">
+<p style="margin: 0; font-size: 15px; color: #9FB0C3"><b style="color: #E6EDF3">2</b> · While connected — always on top, cannot be hidden</p>
+<div style="position: relative; flex: 1; background: #22303F; border: 1px solid #243142; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; align-items: center; padding-top: 16px; box-sizing: border-box">
+<div style="position: absolute; left: 8%; top: 28%; width: 56%; height: 52%; background: #EEF2F6; border-radius: 6px; overflow: hidden">
+<div style="height: 12%; background: #D7DEE6"></div>
+</div>
+<div style="position: relative; display: inline-flex; align-items: center; gap: 12px; padding: 6px 6px 6px 16px; background: #151E28; border: 1px solid {{accent}}; border-radius: 999px; font-size: 14px; white-space: nowrap; box-shadow: 0 8px 24px rgba(0,0,0,0.4)">
+<span style="width: 8px; height: 8px; border-radius: 50%; background: {{accent}}"></span>
+<span>Controlled by <b>Sher-Laptop</b></span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #9FB0C3">04:12</span>
+<button style="height: 44px; padding: 0 16px; background: #2A1517; border: 1px solid #E5534B; border-radius: 999px; color: #F47067; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">Disconnect</button>
+</div>
+<div style="position: absolute; left: 0; right: 0; bottom: 0; height: 24px; background: #121A23"></div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#F2A93B","options":["#F2A93B","#4C9AFF","#3FB871"]},"$preview":{"width":1280,"height":560}}'>
+class Component extends DCLogic {
+renderVals() {
+return { accent: this.props.accent ?? '#F2A93B' };
+}
+}
+</script>
+</body>
+</html>
