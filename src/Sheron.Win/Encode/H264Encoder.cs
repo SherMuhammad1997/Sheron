@@ -31,6 +31,12 @@ internal sealed class H264Encoder : IDisposable
     /// <summary>MF_LOW_LATENCY (mfapi.h); the same ID as CODECAPI_AVLowLatencyMode.</summary>
     private static readonly Guid LowLatencyAttribute = new("9c27891a-ed7a-40e1-88e8-b22727a024ee");
 
+    /// <summary>MFSampleExtension_Discontinuity (mfapi.h): marks the first sample of a stream.</summary>
+    private static readonly Guid DiscontinuityAttribute = new("9cdf01d9-a0f0-43ba-b077-eaa06cbd728a");
+
+    /// <summary>MF_E_NO_MORE_TYPES (mferror.h).</summary>
+    private const int NoMoreTypes = unchecked((int)0xC00D36B9);
+
     // Media type values from the Windows SDK (mfobjects.h, codecapi.h).
     private const uint InterlaceProgressive = 2;   // MFVideoInterlace_Progressive
     private const uint ProfileMain = 77;           // eAVEncH264VProfile_Main
@@ -48,6 +54,7 @@ internal sealed class H264Encoder : IDisposable
     private readonly ID3D11Device _device;
     private readonly ID3D11DeviceContext _context;
     private readonly VideoSettings _settings;
+    private readonly EncoderOptions _options;
     private readonly SemaphoreSlim _needInput = new(0);
     private readonly SemaphoreSlim _haveOutput = new(0);
     private IMFDXGIDeviceManager? _deviceManager;
@@ -57,10 +64,11 @@ internal sealed class H264Encoder : IDisposable
     private bool _providesSamples;
     private IMFSample? _outputSample;
     private ID3D11Texture2D? _staging;
+    private bool _sentFirstSample;
 
     /// <summary>Takes ownership of <paramref name="activate"/>.</summary>
     public H264Encoder(IMFActivate activate, string name, EncoderKind kind, ID3D11Device device,
-        ID3D11DeviceContext context, VideoSettings settings)
+        ID3D11DeviceContext context, VideoSettings settings, EncoderOptions? options = null)
     {
         _activate = activate;
         Name = name;
@@ -68,6 +76,7 @@ internal sealed class H264Encoder : IDisposable
         _device = device;
         _context = context;
         _settings = settings;
+        _options = options ?? EncoderOptions.Default;
         _transform = activate.ActivateObject<IMFTransform>();
     }
 
@@ -103,18 +112,21 @@ internal sealed class H264Encoder : IDisposable
             _deviceManager.ResetDevice(_device).CheckError();
             _transform.ProcessMessage(TMessageType.MessageSetD3DManager, (nuint)_deviceManager.NativePointer);
         }
-        TrySetLowLatencyAttribute();
-        Settings = CodecApi.Apply(_transform, _settings);
+        if (_options.LowLatency) TrySetLowLatencyAttribute();
+        Settings = CodecApi.Apply(_transform, _settings, _options);
 
         // Encoders take the output type first, then the input type.
-        using (var output = CreateType(VideoFormatGuids.H264))
+        using (var output = MediaType(output: true, VideoFormatGuids.H264))
         {
             output.Set(MediaTypeAttributeKeys.AvgBitrate, (uint)_settings.BitsPerSecond).CheckError();
             output.Set(MediaTypeAttributeKeys.Mpeg2Profile, ProfileMain).CheckError();
-            output.Set(MediaTypeAttributeKeys.MaxKeyframeSpacing, (uint)_settings.KeyFrameInterval).CheckError();
+            if (_options.KeyFrameInterval)
+                output.Set(MediaTypeAttributeKeys.MaxKeyframeSpacing, (uint)_settings.KeyFrameInterval).CheckError();
+            if (_options.Level != 0)
+                output.Set(MediaTypeAttributeKeys.Mpeg2Level, _options.Level).CheckError();
             _transform.SetOutputType(0, output, 0);
         }
-        using (var input = CreateType(VideoFormatGuids.NV12))
+        using (var input = MediaType(output: false, VideoFormatGuids.NV12))
             _transform.SetInputType(0, input, 0);
         if (UsesGpuInput) InputBindFlags = ReadInputBindFlags();
 
@@ -147,6 +159,11 @@ internal sealed class H264Encoder : IDisposable
         using var sample = UsesGpuInput ? GpuSample(nv12) : CpuSample(nv12);
         sample.SampleTime = at.Ticks;
         sample.SampleDuration = TimeSpan.TicksPerSecond / _settings.FramesPerSecond;
+        if (!_sentFirstSample)
+        {
+            sample.Set(DiscontinuityAttribute, 1u).CheckError();
+            _sentFirstSample = true;
+        }
 
         var frames = new List<EncodedFrame>(1);
         if (IsHardware)
@@ -172,18 +189,49 @@ internal sealed class H264Encoder : IDisposable
         return frames;
     }
 
-    private IMFMediaType CreateType(Guid subtype)
+    /// <summary>A video type of the given subtype, with our size, frame rate and (if chosen) colour marks.</summary>
+    private IMFMediaType MediaType(bool output, Guid subtype)
     {
-        var type = MediaFactory.MFCreateMediaType();
-        type.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video).CheckError();
-        type.Set(MediaTypeAttributeKeys.Subtype, subtype).CheckError();
+        IMFMediaType type;
+        if (_options.OfferedTypes)
+        {
+            type = OfferedType(output, subtype);
+        }
+        else
+        {
+            type = MediaFactory.MFCreateMediaType();
+            type.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video).CheckError();
+            type.Set(MediaTypeAttributeKeys.Subtype, subtype).CheckError();
+        }
         type.Set(MediaTypeAttributeKeys.FrameSize, Pack((uint)_settings.Width, (uint)_settings.Height)).CheckError();
         type.Set(MediaTypeAttributeKeys.FrameRate, Pack((uint)_settings.FramesPerSecond, 1)).CheckError();
         type.Set(MediaTypeAttributeKeys.PixelAspectRatio, Pack(1, 1)).CheckError();
         type.Set(MediaTypeAttributeKeys.InterlaceMode, InterlaceProgressive).CheckError();
-        type.Set(MediaTypeAttributeKeys.YuvMatrix, TransferMatrixBt709).CheckError();
-        type.Set(MediaTypeAttributeKeys.VideoNominalRange, NominalRange16To235).CheckError();
+        if (_options.ColourAttributes)
+        {
+            type.Set(MediaTypeAttributeKeys.YuvMatrix, TransferMatrixBt709).CheckError();
+            type.Set(MediaTypeAttributeKeys.VideoNominalRange, NominalRange16To235).CheckError();
+        }
         return type;
+    }
+
+    /// <summary>The first type of the given subtype that the encoder itself offers.</summary>
+    private IMFMediaType OfferedType(bool output, Guid subtype)
+    {
+        for (int index = 0; ; index++)
+        {
+            IMFMediaType type;
+            try
+            {
+                type = output ? _transform.GetOutputAvailableType(0, index) : _transform.GetInputAvailableType(0, index);
+            }
+            catch (SharpGenException error) when (error.ResultCode.Code == NoMoreTypes)
+            {
+                throw new InvalidOperationException($"The encoder offers no {(output ? "H.264 output" : "NV12 input")} type.");
+            }
+            if (type.GetGUID(MediaTypeAttributeKeys.Subtype) == subtype) return type;
+            type.Dispose();
+        }
     }
 
     private static ulong Pack(uint high, uint low) => ((ulong)high << 32) | low;

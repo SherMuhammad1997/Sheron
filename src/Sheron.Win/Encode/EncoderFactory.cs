@@ -16,7 +16,7 @@ internal static class EncoderFactory
     /// <param name="adapterVendorId">The capture adapter's vendor: a hardware encoder of another GPU cannot use its frames.</param>
     /// <param name="failures">Encoders that were tried and failed, with the reason.</param>
     public static H264Encoder? Create(ID3D11Device device, ID3D11DeviceContext context, VideoSettings settings,
-        EncoderKind kind, uint adapterVendorId, out IReadOnlyList<string> failures)
+        EncoderKind kind, uint adapterVendorId, out IReadOnlyList<string> failures, EncoderOptions? options = null)
     {
         MediaFoundationStarted.Value.CheckError();
         var tried = new List<string>();
@@ -26,7 +26,7 @@ internal static class EncoderFactory
             ? Find(EnumFlag.EnumFlagSyncmft | EnumFlag.EnumFlagLocalmft | EnumFlag.EnumFlagSortandfilter, null)
             : Find(EnumFlag.EnumFlagHardware | EnumFlag.EnumFlagSortandfilter, $"VEN_{adapterVendorId:X4}");
         if (candidates.Count == 0) tried.Add($"{Describe(kind)}: none found");
-        return StartFirst(candidates, kind, device, context, settings, tried);
+        return StartFirst(candidates, kind, device, context, settings, options, tried);
     }
 
     public static string Describe(EncoderKind kind) => kind switch
@@ -43,7 +43,7 @@ internal static class EncoderFactory
         $"{(string.IsNullOrEmpty(result.ApiCode) ? "error" : result.ApiCode)} (0x{result.Code:X8})";
 
     private static H264Encoder? StartFirst(List<(IMFActivate Activate, string Name)> candidates, EncoderKind kind,
-        ID3D11Device device, ID3D11DeviceContext context, VideoSettings settings, List<string> tried)
+        ID3D11Device device, ID3D11DeviceContext context, VideoSettings settings, EncoderOptions? options, List<string> tried)
     {
         H264Encoder? started = null;
         foreach (var (activate, name) in candidates)
@@ -57,7 +57,7 @@ internal static class EncoderFactory
             H264Encoder? encoder = null;
             try
             {
-                encoder = new H264Encoder(activate, name, kind, device, context, settings);
+                encoder = new H264Encoder(activate, name, kind, device, context, settings, options);
                 encoder.Start();
                 started = encoder;
             }

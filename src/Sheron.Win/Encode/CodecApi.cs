@@ -36,20 +36,25 @@ internal static class CodecApi
     /// Applies each setting on its own, because encoders support different ones. Returns one line per setting with
     /// ✓ or ✗, for the capture test window. Call before the media types are set.
     /// </summary>
-    public static IReadOnlyList<string> Apply(IMFTransform transform, VideoSettings settings)
+    public static IReadOnlyList<string> Apply(IMFTransform transform, VideoSettings settings, EncoderOptions options)
     {
         object unknown = Marshal.GetObjectForIUnknown(transform.NativePointer);
         try
         {
             if (unknown is not ICodecAPI codec) return ["encoder settings not offered ✗"];
-            return
-            [
-                Set(codec, LowLatencyMode, true, "low latency"),
-                Set(codec, RateControlMode, ConstantBitrate, "constant bitrate"),
-                Set(codec, MeanBitRate, (uint)settings.BitsPerSecond, $"{settings.BitsPerSecond / 1_000_000.0:0.#} Mbps"),
-                Set(codec, DefaultBPictureCount, 0u, "no B-frames"),
-                Set(codec, GopSize, (uint)settings.KeyFrameInterval, $"keyframe every {settings.KeyFrameInterval}"),
-            ];
+            var applied = new List<string>();
+            if (options.LowLatency)
+                applied.Add(Set(codec, LowLatencyMode, true, "low latency"));
+            if (options.ConstantBitrate)
+            {
+                applied.Add(Set(codec, RateControlMode, ConstantBitrate, "constant bitrate"));
+                applied.Add(Set(codec, MeanBitRate, (uint)settings.BitsPerSecond, $"{settings.BitsPerSecond / 1_000_000.0:0.#} Mbps"));
+            }
+            if (options.NoBFrames)
+                applied.Add(Set(codec, DefaultBPictureCount, 0u, "no B-frames"));
+            if (options.KeyFrameInterval)
+                applied.Add(Set(codec, GopSize, (uint)settings.KeyFrameInterval, $"keyframe every {settings.KeyFrameInterval}"));
+            return applied.Count > 0 ? applied : ["encoder defaults"];
         }
         finally
         {
