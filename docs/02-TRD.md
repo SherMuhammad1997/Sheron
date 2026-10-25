@@ -46,6 +46,8 @@ Capture test window (developer only, Plan steps 3–4): `Sheron.Win.exe --captur
 
 The capture device is made with BGRA and video support and is multithread-protected, because the hardware encoder uses it from its own threads.
 
+While video runs, Sheron asks Windows for a 1 ms timer (`timeBeginPeriod`) and opts out of power throttling (`SetProcessInformation`, ProcessPowerThrottling: execution speed and ignore-timer-resolution off), so it is not slowed down when its window is hidden. With the default 15.6 ms timer, Intel Quick Sync took 16.3 ms per frame (25 Oct).
+
 Measured on Sher's laptop, 25 Oct (Intel Graphics, 1920 × 1200 at 60 Hz): capture 60 fps, 0.15 ms average and 0.22 ms max per frame; Sheron CPU 0.0 % on a still screen and 0.4 % while capturing 60 fps.
 
 ## Automatic quality

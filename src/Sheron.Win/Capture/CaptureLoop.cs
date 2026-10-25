@@ -20,7 +20,8 @@ internal sealed record CaptureLoopSnapshot(
     string Encoder,
     string EncoderSettings,
     EncodeSnapshot Encode,
-    int HeldBack);
+    int HeldBack,
+    bool FineTimer);
 
 /// <summary>
 /// Runs <see cref="DesktopDuplicator"/> and the encoder on their own thread, reopens them when Windows takes the
@@ -33,6 +34,7 @@ internal sealed class CaptureLoop : IDisposable
     private const int RetryMs = 250;
 
     private readonly EncoderKind[] _kinds;
+    private readonly TimerResolution _timer = new();
     private readonly Thread _thread;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly CaptureStats _stats = new();
@@ -79,7 +81,7 @@ internal sealed class CaptureLoop : IDisposable
         {
             return new CaptureLoopSnapshot(_capturing, _status, _adapter, _monitor, _width, _height,
                 _stats.Snapshot(now), _pointer, _shape, _shapeChanges, _reopens,
-                _encoderName, _encoderSettings, _encodeStats.Snapshot(now), _heldBack);
+                _encoderName, _encoderSettings, _encodeStats.Snapshot(now), _heldBack, _timer.IsFine);
         }
     }
 
@@ -256,5 +258,6 @@ internal sealed class CaptureLoop : IDisposable
     {
         _stopping = true;
         _thread.Join(TimeSpan.FromSeconds(2));
+        _timer.Dispose();
     }
 }

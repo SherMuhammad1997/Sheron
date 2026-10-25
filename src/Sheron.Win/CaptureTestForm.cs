@@ -119,6 +119,7 @@ internal sealed class CaptureTestForm : Form
         yield return ("Encode time", $"avg {encode.AverageEncodeMs:0.00} ms · max {encode.MaxEncodeMs:0.00} ms");
         yield return ("Video", $"{encode.FramesPerSecond} fps · {encode.KilobitsPerSecond} kbit/s · {encode.KeyFrames} keyframes");
         yield return ("Held back", $"{s.HeldBack} frames");
+        yield return ("Timer", s.FineTimer ? "1 ms" : "Windows default (15.6 ms)");
 
         yield return ("Sheron CPU", $"{_cpuPercent:0.0} % of this PC (last 3 s)");
         yield return ("Reopened", $"{s.Reopens}×");

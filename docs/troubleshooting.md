@@ -14,6 +14,12 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-10-25 — Intel Quick Sync encoder: ProcessOutput fails with E_UNEXPECTED (0x8000FFFF)  (Plan step 4)
+Symptom:     The Intel® Quick Sync Video H.264 Encoder MFT accepted every setting and the first frame (events "need input", "have output"), then ProcessOutput returned E_UNEXPECTED. Same with GPU and memory input, with and without low latency, with our own output buffer, through Vortice's ProcessOutput, and with one thread doing every call. The Microsoft software encoder worked.
+Root cause:  This Intel encoder only produces output when the ICodecAPI scenario (AVScenarioInfo) is set; with display remoting it works. Found by the Windows test `Hardware_encoder_settings_check`, which tries the settings one by one.
+Exact fix:   `EncoderOptions.Scenario` defaults to display remoting (eAVScenarioInfo_DisplayRemoting = 1), set through ICodecAPI before the media types. Also kept from the hunt: one worker thread owns a hardware encoder (each call follows its event), encoder routes fall back GPU input → memory input → software, and hardware encoders must match the capture adapter's vendor.
+Files:       `src/Sheron.Win/Encode/EncoderOptions.cs`, `src/Sheron.Win/Encode/CodecApi.cs`, `src/Sheron.Win/Encode/H264Encoder.cs`, `src/Sheron.Win/Encode/EncoderFactory.cs`, `src/Sheron.Win/Capture/CaptureLoop.cs`, `tests/Sheron.Win.Tests/Encode/EncoderTests.cs`, `docs/02-TRD.md`
+
 ### 2026-10-25 — Windows test: DuplicateOutput fails with E_INVALIDARG (0x80070057)  (Plan step 4)
 Symptom:     `The_main_monitor_gives_a_first_frame_with_the_whole_desktop` failed in `DesktopDuplicator.Open` with E_INVALIDARG, although it passed in step 3.
 Root cause:  xUnit runs test classes in parallel. EncoderTests opened the screen at the same time, and Windows lets one program duplicate a screen only once at a time; the second DuplicateOutput fails with E_INVALIDARG.
