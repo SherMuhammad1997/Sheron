@@ -190,7 +190,8 @@ internal sealed class H264Encoder : IDisposable
     {
         var sample = UsesGpuInput ? GpuSample(nv12) : CpuSample(nv12);
         sample.SampleTime = at.Ticks;
-        sample.SampleDuration = TimeSpan.TicksPerSecond / _settings.FramesPerSecond;
+        if (_options.SampleDuration)
+            sample.SampleDuration = TimeSpan.TicksPerSecond / _settings.FramesPerSecond;
         if (!_sentFirstSample)
         {
             sample.Set(DiscontinuityAttribute, 1u).CheckError();

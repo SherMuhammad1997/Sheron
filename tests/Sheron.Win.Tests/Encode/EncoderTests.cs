@@ -52,6 +52,71 @@ public class EncoderTests
         Assert.True(results[^1].Result.Ok, Environment.NewLine + report);
     });
 
+    /// <summary>
+    /// Plan step 4 "Done when": the hardware encoder's own time (frame in → output ready) is 5 ms or less.
+    /// Measures 40 frames at 60 fps pace for several variants; fails with the whole table if the first line is
+    /// above 5 ms. Intel Quick Sync showed exactly 8.47 ms twice (25 Oct), which looks like a fixed wait.
+    /// </summary>
+    [Fact]
+    public void Hardware_encoder_is_fast_enough() => OnMtaThread(() =>
+    {
+        var trd = EncoderOptions.Default;
+        var variants = new (string Name, EncoderKind Kind, EncoderOptions Options, int Fps)[]
+        {
+            ("1 TRD settings, GPU input, 60 fps", EncoderKind.HardwareGpu, trd, 60),
+            ("2 declared 30 fps", EncoderKind.HardwareGpu, trd, 30),
+            ("3 declared 120 fps", EncoderKind.HardwareGpu, trd, 120),
+            ("4 no sample duration", EncoderKind.HardwareGpu, trd with { SampleDuration = false }, 60),
+            ("5 memory input", EncoderKind.HardwareMemory, trd, 60),
+            ("6 balanced preset", EncoderKind.HardwareGpu, trd with { QualityVsSpeed = -1 }, 60),
+        };
+
+        using var timer = new TimerResolution();
+        using var duplicator = OpenWithFirstFrame();
+        var results = variants.Select(v => (v.Name, Text: MeasureOwnTime(duplicator, v.Kind, v.Options, v.Fps, out double average)
+            , Average: average)).ToList();
+        string report = string.Join(Environment.NewLine, results.Select(r => $"{r.Name}: {r.Text}"));
+        Assert.True(results[0].Average is > 0 and <= 5.0, $"{Environment.NewLine}timer 1 ms: {timer.IsFine}{Environment.NewLine}{report}");
+    });
+
+    /// <summary>Encodes the captured frame 40 times at 60 fps pace; reports the encoder's own time after warm-up.</summary>
+    private static string MeasureOwnTime(DesktopDuplicator duplicator, EncoderKind kind, EncoderOptions options, int fps, out double average)
+    {
+        average = 0;
+        var settings = VideoSettings.ForScreen(duplicator.Width, duplicator.Height) with { FramesPerSecond = fps };
+        using var encoder = EncoderFactory.Create(duplicator.Device, duplicator.Context, settings, kind,
+            duplicator.AdapterVendorId, out var failures, options);
+        if (encoder is null) return "did not start: " + string.Join("; ", failures);
+        try
+        {
+            using var converter = new Nv12Converter(duplicator.Device, duplicator.Context, duplicator.Width,
+                duplicator.Height, settings, encoder.InputBindFlags);
+            var own = new List<double>();
+            var round = new List<double>();
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < 40; i++)
+            {
+                var due = TimeSpan.FromSeconds(i / 60.0);
+                var wait = due - clock.Elapsed;
+                if (wait > TimeSpan.Zero) Thread.Sleep(wait);
+                long started = System.Diagnostics.Stopwatch.GetTimestamp();
+                var frames = encoder.Encode(converter.Convert(duplicator.Frame!), clock.Elapsed);
+                double ms = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                if (i < 5) continue;   // warm-up
+                round.Add(ms);
+                own.AddRange(frames.Select(f => f.EncoderOwnMs));
+            }
+            if (own.Count == 0) return $"no output [{string.Join(", ", encoder.Settings)}]";
+            average = own.Average();
+            return $"inside encoder avg {average:0.00} ms (min {own.Min():0.00}, max {own.Max():0.00}), "
+                + $"round trip avg {round.Average():0.00} ms, held back {encoder.HeldBack}";
+        }
+        catch (Exception error)
+        {
+            return $"{encoder.Details}: {EncoderFactory.Describe(error)}";
+        }
+    }
+
     private static void AssertEncodes(EncoderKind kind)
     {
         using var duplicator = OpenWithFirstFrame();
