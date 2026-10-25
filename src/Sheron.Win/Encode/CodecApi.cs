@@ -28,6 +28,7 @@ internal static class CodecApi
     private static readonly Guid MeanBitRate = new("f7222374-2144-4815-b550-a37f8e12ee52");
     private static readonly Guid DefaultBPictureCount = new("8d390aac-dc5c-4200-b57f-814d04babab2");
     private static readonly Guid GopSize = new("95f31b26-95a4-41aa-9303-246a7fc6eef1");
+    private static readonly Guid ScenarioInfo = new("b28a6e64-3ff9-446a-8a4b-0d7a53413236");
 
     /// <summary>eAVEncCommonRateControlMode_CBR.</summary>
     private const uint ConstantBitrate = 0;
@@ -54,6 +55,8 @@ internal static class CodecApi
                 applied.Add(Set(codec, DefaultBPictureCount, 0u, "no B-frames"));
             if (options.KeyFrameInterval)
                 applied.Add(Set(codec, GopSize, (uint)settings.KeyFrameInterval, $"keyframe every {settings.KeyFrameInterval}"));
+            if (options.Scenario != 0)
+                applied.Add(Set(codec, ScenarioInfo, options.Scenario, $"scenario {options.Scenario}"));
             return applied.Count > 0 ? applied : ["encoder defaults"];
         }
         finally

@@ -61,6 +61,8 @@ internal sealed class H264Encoder : IDisposable
     private readonly EncoderOptions _options;
     private int _inputStreamId;
     private int _outputStreamId;
+    private int _inputAlignment;
+    private string _streamInfo = "";
     private bool _providesSamples;
     private IMFSample? _outputSample;
     private ID3D11Texture2D? _staging;
@@ -108,7 +110,7 @@ internal sealed class H264Encoder : IDisposable
         {
             string events;
             lock (_eventLog) events = string.Join(", ", _eventLog);
-            return $"{Name}, {Kind}, provides samples: {_providesSamples}, input bind flags: 0x{(uint)InputBindFlags:X}"
+            return $"{Name}, {Kind}, provides samples: {_providesSamples}, input bind flags: 0x{(uint)InputBindFlags:X}, {_streamInfo}"
                 + (IsHardware ? $", last events: {(events.Length > 0 ? events : "none")}" : "");
         }
     }
@@ -132,7 +134,7 @@ internal sealed class H264Encoder : IDisposable
             _deviceManager.ResetDevice(_device).CheckError();
             _transform.ProcessMessage(TMessageType.MessageSetD3DManager, (nuint)_deviceManager.NativePointer);
         }
-        if (_options.LowLatency) TrySetLowLatencyAttribute();
+        if (_options.LowLatencyAttribute) TrySetLowLatencyAttribute();
         Settings = CodecApi.Apply(_transform, _settings, _options);
 
         // Encoders take the output type first, then the input type.
@@ -150,9 +152,13 @@ internal sealed class H264Encoder : IDisposable
             _transform.SetInputType(_inputStreamId, input, 0);
         if (UsesGpuInput) InputBindFlags = ReadInputBindFlags();
 
+        var inputInfo = _transform.GetInputStreamInfo(_inputStreamId);
+        _inputAlignment = inputInfo.Alignment;
         var info = _transform.GetOutputStreamInfo(_outputStreamId);
+        _streamInfo = $"input stream flags 0x{inputInfo.Flags:X} size {inputInfo.Size} align {inputInfo.Alignment}, "
+            + $"output stream flags 0x{info.Flags:X} size {info.Size} align {info.Alignment}";
         const int provides = (int)(OutputStreamInfoFlags.OutputStreamProvidesSamples | OutputStreamInfoFlags.OutputStreamCanProvideSamples);
-        _providesSamples = (info.Flags & provides) != 0;
+        _providesSamples = !_options.CallerAllocatesOutput && (info.Flags & provides) != 0;
         if (!_providesSamples)
         {
             _outputSample = MediaFactory.MFCreateSample();
@@ -421,7 +427,10 @@ internal sealed class H264Encoder : IDisposable
         _context.CopyResource(_staging, nv12);
 
         int frameBytes = width * height * 3 / 2;
-        using var buffer = MediaFactory.MFCreateMemoryBuffer(frameBytes);
+        // MFCreateAlignedMemoryBuffer takes the alignment minus one (MF_16_BYTE_ALIGNMENT is 15).
+        using var buffer = _options.AlignedInput && _inputAlignment > 1
+            ? MediaFactory.MFCreateAlignedMemoryBuffer(frameBytes, _inputAlignment - 1)
+            : MediaFactory.MFCreateMemoryBuffer(frameBytes);
         var mapped = _context.Map(_staging, 0, MapMode.Read);
         try
         {
@@ -457,6 +466,7 @@ internal sealed class H264Encoder : IDisposable
     /// </summary>
     private unsafe bool ReadOutput(List<EncodedFrame> frames)
     {
+        if (_options.VorticeProcessOutput) return ReadOutputThroughVortice(frames);
         var processOutput = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, NativeOutputDataBuffer*, uint*, int>)
             (*(IntPtr**)_transform.NativePointer)[ProcessOutputSlot];
         while (true)
@@ -491,6 +501,29 @@ internal sealed class H264Encoder : IDisposable
             {
                 frames.Add(ToFrame(_outputSample!));
             }
+            return true;
+        }
+    }
+
+    /// <summary>The same as <see cref="ReadOutput"/>, through Vortice's wrapper (settings check only).</summary>
+    private bool ReadOutputThroughVortice(List<EncodedFrame> frames)
+    {
+        while (true)
+        {
+            if (!_providesSamples) ResetOutputSample();
+            var output = new OutputDataBuffer { StreamID = _outputStreamId, Sample = _providesSamples ? null! : _outputSample! };
+            var result = _transform.ProcessOutput(ProcessOutputFlags.None, 1, ref output, out _);
+            output.Events?.Dispose();
+            if (result.Failure)
+            {
+                if (result == Vortice.MediaFoundation.ResultCode.TransformNeedMoreInput) return false;
+                if (result != Vortice.MediaFoundation.ResultCode.TransformStreamChange) result.CheckError();
+                using var type = _transform.GetOutputAvailableType(_outputStreamId, 0);
+                _transform.SetOutputType(_outputStreamId, type, 0);
+                continue;
+            }
+            frames.Add(ToFrame(output.Sample));
+            if (_providesSamples) output.Sample.Dispose();
             return true;
         }
     }

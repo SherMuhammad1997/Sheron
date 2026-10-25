@@ -24,34 +24,32 @@ public class EncoderTests
         OnMtaThread(() => AssertEncodes(EncoderKind.Software));
 
     /// <summary>
-    /// Plan step 4 check: gives the hardware encoder more and more of the TRD settings, to find what it accepts.
+    /// Plan step 4 check: drives the hardware encoder in different ways, to find what it accepts. Earlier runs
+    /// showed Intel Quick Sync fails with E_UNEXPECTED when output is collected in low-latency mode.
     /// Fails, listing every result, unless the TRD settings (the last line) work.
     /// </summary>
     [Fact]
     public void Hardware_encoder_settings_check() => OnMtaThread(() =>
     {
-        var offered = EncoderOptions.Bare with { OfferedTypes = true };
-        var variants = new (string Name, EncoderOptions Options)[]
+        var noLowLatency = EncoderOptions.Default with { LowLatency = false, LowLatencyAttribute = false };
+        var variants = new (string Name, EncoderOptions Options, int Frames, int Bitrate)[]
         {
-            ("1 encoder's own types, nothing extra", offered),
-            ("2 = 1 + no B-frames", offered with { NoBFrames = true }),
-            ("3 = 2 + low latency", offered with { NoBFrames = true, LowLatency = true }),
-            ("4 = 3 + constant bitrate", offered with { NoBFrames = true, LowLatency = true, ConstantBitrate = true }),
-            ("5 = 4 + keyframe interval", offered with { NoBFrames = true, LowLatency = true, ConstantBitrate = true, KeyFrameInterval = true }),
-            ("6 = 5 + colour marks", EncoderOptions.Default with { OfferedTypes = true }),
-            ("7 our own types, nothing extra", EncoderOptions.Bare),
-            ("8 = 7 + H.264 level 5.1", EncoderOptions.Bare with { Level = 51 }),
-            ("9 our own types, TRD settings, 30 fps", EncoderOptions.Default),
-            ("10 our own types, TRD settings + level 5.1", EncoderOptions.Default with { Level = 51 }),
-            ("11 our own types, TRD settings", EncoderOptions.Default),
+            ("1 no low latency, up to 30 frames", noLowLatency, 30, 8_000_000),
+            ("2 display remoting, no low latency, up to 30 frames", noLowLatency with { Scenario = 1 }, 30, 8_000_000),
+            ("3 low latency, we provide the output buffer", EncoderOptions.Default with { CallerAllocatesOutput = true }, 1, 8_000_000),
+            ("4 low latency, output through Vortice", EncoderOptions.Default with { VorticeProcessOutput = true }, 1, 8_000_000),
+            ("5 low latency, aligned input buffer", EncoderOptions.Default with { AlignedInput = true }, 1, 8_000_000),
+            ("6 low latency through MF_LOW_LATENCY only", EncoderOptions.Default with { LowLatency = false }, 1, 8_000_000),
+            ("7 low latency through ICodecAPI only", EncoderOptions.Default with { LowLatencyAttribute = false }, 1, 8_000_000),
+            ("8 TRD settings at 30 Mbps", EncoderOptions.Default, 1, 30_000_000),
+            ("9 encoder's own types, we provide the output buffer", EncoderOptions.Default with { OfferedTypes = true, CallerAllocatesOutput = true }, 1, 8_000_000),
+            ("10 TRD settings", EncoderOptions.Default, 1, 8_000_000),
         };
 
         using var duplicator = OpenWithFirstFrame();
-        var results = variants.Select(v =>
-        {
-            int fps = v.Name.EndsWith("30 fps") ? 30 : 60;
-            return (v.Name, Result: TryEncode(duplicator, EncoderKind.HardwareMemory, v.Options, fps));
-        }).ToList();
+        var results = variants
+            .Select(v => (v.Name, Result: TryEncode(duplicator, EncoderKind.HardwareMemory, v.Options, maxFrames: v.Frames, bitsPerSecond: v.Bitrate)))
+            .ToList();
         string report = string.Join(Environment.NewLine, results.Select(r => $"{r.Name}: {r.Result.Text}"));
         Assert.True(results[^1].Result.Ok, Environment.NewLine + report);
     });
@@ -74,11 +72,14 @@ public class EncoderTests
         return duplicator;
     }
 
-    /// <summary>Starts a fresh encoder and encodes the captured frame; says what happened.</summary>
+    /// <summary>
+    /// Starts a fresh encoder and encodes the captured frame, again up to <paramref name="maxFrames"/> times until
+    /// output comes back; says what happened.
+    /// </summary>
     private static (bool Ok, string Text) TryEncode(DesktopDuplicator duplicator, EncoderKind kind, EncoderOptions options,
-        int framesPerSecond = 60)
+        int maxFrames = 1, int bitsPerSecond = 8_000_000)
     {
-        var settings = VideoSettings.ForScreen(duplicator.Width, duplicator.Height) with { FramesPerSecond = framesPerSecond };
+        var settings = VideoSettings.ForScreen(duplicator.Width, duplicator.Height) with { BitsPerSecond = bitsPerSecond };
         using var encoder = EncoderFactory.Create(duplicator.Device, duplicator.Context, settings, kind,
             duplicator.AdapterVendorId, out var failures, options);
         if (encoder is null) return (false, "did not start: " + string.Join("; ", failures));
@@ -88,14 +89,21 @@ public class EncoderTests
         {
             using var converter = new Nv12Converter(duplicator.Device, duplicator.Context, duplicator.Width,
                 duplicator.Height, settings, encoder.InputBindFlags);
-            var frames = encoder.Encode(converter.Convert(duplicator.Frame!), TimeSpan.Zero);
+            IReadOnlyList<EncodedFrame> frames = [];
+            int sent = 0;
+            while (frames.Count == 0 && sent < maxFrames)
+            {
+                frames = encoder.Encode(converter.Convert(duplicator.Frame!), TimeSpan.FromSeconds(sent / 60.0));
+                sent++;
+            }
 
-            // Low latency: the encoder answers this frame at once, and the first frame is a keyframe in Annex B form.
-            if (frames.Count != 1) return (false, $"{frames.Count} frames back instead of 1 [{applied}]");
+            // Low latency: the encoder answers the first frame at once, with a keyframe in Annex B form.
+            if (frames.Count == 0) return (false, $"no output after {sent} frames [{applied}]");
+            if (maxFrames == 1 && frames.Count != 1) return (false, $"{frames.Count} frames back instead of 1 [{applied}]");
             var frame = frames[0];
             if (!frame.KeyFrame) return (false, $"first frame is not a keyframe [{applied}]");
             if (frame.Data is not ([0, 0, 1, ..] or [0, 0, 0, 1, ..])) return (false, $"output is not Annex B H.264 [{applied}]");
-            return (true, $"OK, {frame.Data.Length / 1024} kB keyframe [{applied}]");
+            return (true, $"OK after {sent} frame(s), {frame.Data.Length / 1024} kB keyframe [{applied}]");
         }
         catch (Exception error)
         {
