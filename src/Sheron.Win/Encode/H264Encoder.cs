@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using SharpGen.Runtime;
 using Sheron.Core.Video;
@@ -22,9 +23,10 @@ internal enum EncoderKind
 internal sealed record EncodedFrame(byte[] Data, bool KeyFrame);
 
 /// <summary>
-/// One H.264 encoder: a Media Foundation transform (TRD › Video path). Hardware encoders are asynchronous: their
-/// events say when they want input and when output is ready. The software encoder answers at once.
-/// Not thread-safe: the capture thread owns it.
+/// One H.264 encoder: a Media Foundation transform (TRD › Video path). The software encoder answers at once on the
+/// caller's thread. A hardware encoder is asynchronous: its events say when it wants input and has output, and one
+/// worker thread owns it, so each call follows the event that asked for it before the next event is read (Intel's
+/// encoder fails with E_UNEXPECTED otherwise). <see cref="Encode"/> is called from one thread only.
 /// </summary>
 internal sealed class H264Encoder : IDisposable
 {
@@ -34,8 +36,9 @@ internal sealed class H264Encoder : IDisposable
     /// <summary>MFSampleExtension_Discontinuity (mfapi.h): marks the first sample of a stream.</summary>
     private static readonly Guid DiscontinuityAttribute = new("9cdf01d9-a0f0-43ba-b077-eaa06cbd728a");
 
-    /// <summary>MF_E_NO_MORE_TYPES (mferror.h).</summary>
-    private const int NoMoreTypes = unchecked((int)0xC00D36B9);
+    // Result codes from the Windows SDK (winerror.h, mferror.h).
+    private const int NotImplemented = unchecked((int)0x80004001);   // E_NOTIMPL
+    private const int NoMoreTypes = unchecked((int)0xC00D36B9);      // MF_E_NO_MORE_TYPES
 
     // Media type values from the Windows SDK (mfobjects.h, codecapi.h).
     private const uint InterlaceProgressive = 2;   // MFVideoInterlace_Progressive
@@ -48,6 +51,7 @@ internal sealed class H264Encoder : IDisposable
 
     private const int WaitForInputMs = 500;
     private const int WaitForOutputMs = 200;
+    private const int EventLogSize = 8;
 
     private readonly IMFActivate _activate;
     private readonly IMFTransform _transform;
@@ -55,16 +59,22 @@ internal sealed class H264Encoder : IDisposable
     private readonly ID3D11DeviceContext _context;
     private readonly VideoSettings _settings;
     private readonly EncoderOptions _options;
-    private readonly SemaphoreSlim _needInput = new(0);
-    private readonly SemaphoreSlim _haveOutput = new(0);
-    private IMFDXGIDeviceManager? _deviceManager;
-    private IMFMediaEventGenerator? _events;
-    private Thread? _eventPump;
-    private volatile string? _eventError;
+    private int _inputStreamId;
+    private int _outputStreamId;
     private bool _providesSamples;
     private IMFSample? _outputSample;
     private ID3D11Texture2D? _staging;
+    private IMFDXGIDeviceManager? _deviceManager;
     private bool _sentFirstSample;
+
+    // Hardware encoders only: the worker thread that owns the transform, and what it shares with Encode.
+    private IMFMediaEventGenerator? _events;
+    private Thread? _worker;
+    private readonly BlockingCollection<IMFSample> _inbox = new(boundedCapacity: 1);
+    private readonly BlockingCollection<EncodedFrame> _outbox = new();
+    private readonly CancellationTokenSource _stopping = new();
+    private readonly Queue<string> _eventLog = new();
+    private volatile string? _workerError;
 
     /// <summary>Takes ownership of <paramref name="activate"/>.</summary>
     public H264Encoder(IMFActivate activate, string name, EncoderKind kind, ID3D11Device device,
@@ -92,7 +102,16 @@ internal sealed class H264Encoder : IDisposable
     public IReadOnlyList<string> Settings { get; private set; } = [];
 
     /// <summary>Facts that help when this encoder fails, for test messages and the test window.</summary>
-    public string Details => $"{Name}, {Kind}, provides samples: {_providesSamples}, input bind flags: 0x{(uint)InputBindFlags:X}";
+    public string Details
+    {
+        get
+        {
+            string events;
+            lock (_eventLog) events = string.Join(", ", _eventLog);
+            return $"{Name}, {Kind}, provides samples: {_providesSamples}, input bind flags: 0x{(uint)InputBindFlags:X}"
+                + (IsHardware ? $", last events: {(events.Length > 0 ? events : "none")}" : "");
+        }
+    }
 
     /// <summary>Frames the encoder kept instead of answering at once; above 0 means low latency is not working.</summary>
     public int HeldBack { get; private set; }
@@ -106,6 +125,7 @@ internal sealed class H264Encoder : IDisposable
             using var attributes = _transform.Attributes;
             attributes.Set(TransformAttributeKeys.TransformAsyncUnlock, 1u).CheckError();
         }
+        ReadStreamIds();
         if (UsesGpuInput)
         {
             _deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
@@ -124,13 +144,13 @@ internal sealed class H264Encoder : IDisposable
                 output.Set(MediaTypeAttributeKeys.MaxKeyframeSpacing, (uint)_settings.KeyFrameInterval).CheckError();
             if (_options.Level != 0)
                 output.Set(MediaTypeAttributeKeys.Mpeg2Level, _options.Level).CheckError();
-            _transform.SetOutputType(0, output, 0);
+            _transform.SetOutputType(_outputStreamId, output, 0);
         }
         using (var input = MediaType(output: false, VideoFormatGuids.NV12))
-            _transform.SetInputType(0, input, 0);
+            _transform.SetInputType(_inputStreamId, input, 0);
         if (UsesGpuInput) InputBindFlags = ReadInputBindFlags();
 
-        var info = _transform.GetOutputStreamInfo(0);
+        var info = _transform.GetOutputStreamInfo(_outputStreamId);
         const int provides = (int)(OutputStreamInfoFlags.OutputStreamProvidesSamples | OutputStreamInfoFlags.OutputStreamCanProvideSamples);
         _providesSamples = (info.Flags & provides) != 0;
         if (!_providesSamples)
@@ -140,14 +160,16 @@ internal sealed class H264Encoder : IDisposable
             _outputSample.AddBuffer(buffer);
         }
 
-        if (IsHardware)
-        {
-            _events = _transform.QueryInterface<IMFMediaEventGenerator>();
-            _eventPump = new Thread(PumpEvents) { IsBackground = true, Name = "Sheron encoder events" };
-            _eventPump.Start();
-        }
+        if (IsHardware) _events = _transform.QueryInterface<IMFMediaEventGenerator>();
         _transform.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, 0);
         _transform.ProcessMessage(TMessageType.MessageNotifyStartOfStream, 0);
+        if (IsHardware)
+        {
+            // From here on only the worker calls the transform, until Dispose stops it.
+            _worker = new Thread(RunWorker) { IsBackground = true, Name = "Sheron encoder" };
+            _worker.SetApartmentState(ApartmentState.MTA);
+            _worker.Start();
+        }
     }
 
     /// <summary>
@@ -156,7 +178,7 @@ internal sealed class H264Encoder : IDisposable
     /// </summary>
     public IReadOnlyList<EncodedFrame> Encode(ID3D11Texture2D nv12, TimeSpan at)
     {
-        using var sample = UsesGpuInput ? GpuSample(nv12) : CpuSample(nv12);
+        var sample = UsesGpuInput ? GpuSample(nv12) : CpuSample(nv12);
         sample.SampleTime = at.Ticks;
         sample.SampleDuration = TimeSpan.TicksPerSecond / _settings.FramesPerSecond;
         if (!_sentFirstSample)
@@ -168,25 +190,130 @@ internal sealed class H264Encoder : IDisposable
         var frames = new List<EncodedFrame>(1);
         if (IsHardware)
         {
-            // Output that arrived late belongs to earlier frames: collect it first.
-            while (_haveOutput.Wait(0)) ReadOutput(frames);
-            if (!_needInput.Wait(WaitForInputMs)) throw new TimeoutException("The encoder stopped asking for frames.");
-            ThrowIfEncoderFailed();
-            _transform.ProcessInput(0, sample, 0);
-            if (_haveOutput.Wait(WaitForOutputMs))
+            // Output that came late belongs to earlier frames: collect it first.
+            while (_outbox.TryTake(out var late)) frames.Add(late);
+            ThrowIfWorkerFailed();
+            if (!_inbox.TryAdd(sample, WaitForInputMs))
             {
-                ThrowIfEncoderFailed();
-                ReadOutput(frames);
+                sample.Dispose();
+                ThrowIfWorkerFailed();
+                throw new TimeoutException("The encoder stopped asking for frames.");
             }
+            // The worker owns the sample now. Wait for this frame's output.
+            if (_outbox.TryTake(out var frame, WaitForOutputMs))
+            {
+                frames.Add(frame);
+                while (_outbox.TryTake(out var more)) frames.Add(more);
+            }
+            ThrowIfWorkerFailed();
         }
         else
         {
-            _transform.ProcessInput(0, sample, 0);
+            using (sample) _transform.ProcessInput(_inputStreamId, sample, 0);
             while (ReadOutput(frames)) { }
         }
 
         if (frames.Count == 0) HeldBack++;
         return frames;
+    }
+
+    /// <summary>
+    /// Hardware encoders: read one event, do what it asks, then read the next, all on this thread.
+    /// Stops when Dispose shuts the encoder down (GetEvent then fails) or on the first error.
+    /// </summary>
+    private void RunWorker()
+    {
+        try
+        {
+            while (!_stopping.IsCancellationRequested)
+            {
+                MediaEventTypes type;
+                Result status;
+                using (var e = _events!.GetEvent(0))
+                {
+                    type = e.EventType;
+                    status = e.Status;
+                }
+                LogEvent(type, status);
+                if (status.Failure || type == MediaEventTypes.Error)
+                {
+                    Fail($"{type}: {EncoderFactory.Describe(status)}");
+                    return;
+                }
+
+                switch (type)
+                {
+                    case MediaEventTypes.TransformNeedInput:
+                        IMFSample sample;
+                        try
+                        {
+                            sample = _inbox.Take(_stopping.Token);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            return;
+                        }
+                        using (sample) _transform.ProcessInput(_inputStreamId, sample, 0);
+                        break;
+
+                    case MediaEventTypes.TransformHaveOutput:
+                        var frames = new List<EncodedFrame>(1);
+                        ReadOutput(frames);
+                        foreach (var frame in frames) _outbox.Add(frame);
+                        break;
+                }
+            }
+        }
+        catch (Exception error) when (!_stopping.IsCancellationRequested)
+        {
+            Fail(EncoderFactory.Describe(error));
+        }
+        catch (Exception)
+        {
+            // Shut down while waiting: the normal way out.
+        }
+    }
+
+    private void Fail(string reason)
+    {
+        _workerError = reason;
+        _outbox.CompleteAdding();   // wakes Encode if it is waiting for output
+    }
+
+    private void ThrowIfWorkerFailed()
+    {
+        if (_workerError is { } error) throw new InvalidOperationException($"The encoder failed: {error}.");
+    }
+
+    private void LogEvent(MediaEventTypes type, Result status)
+    {
+        string name = type switch
+        {
+            MediaEventTypes.TransformNeedInput => "need input",
+            MediaEventTypes.TransformHaveOutput => "have output",
+            _ => type.ToString(),
+        };
+        lock (_eventLog)
+        {
+            _eventLog.Enqueue(status.Success ? name : $"{name} {EncoderFactory.Describe(status)}");
+            if (_eventLog.Count > EventLogSize) _eventLog.Dequeue();
+        }
+    }
+
+    /// <summary>Stream IDs are 0 unless the encoder says otherwise (it may not implement GetStreamIDs).</summary>
+    private void ReadStreamIds()
+    {
+        try
+        {
+            var inputs = new int[1];
+            var outputs = new int[1];
+            _transform.GetStreamIDs(1, inputs, 1, outputs);
+            _inputStreamId = inputs[0];
+            _outputStreamId = outputs[0];
+        }
+        catch (SharpGenException error) when (error.ResultCode.Code == NotImplemented)
+        {
+        }
     }
 
     /// <summary>A video type of the given subtype, with our size, frame rate and (if chosen) colour marks.</summary>
@@ -223,7 +350,9 @@ internal sealed class H264Encoder : IDisposable
             IMFMediaType type;
             try
             {
-                type = output ? _transform.GetOutputAvailableType(0, index) : _transform.GetInputAvailableType(0, index);
+                type = output
+                    ? _transform.GetOutputAvailableType(_outputStreamId, index)
+                    : _transform.GetInputAvailableType(_inputStreamId, index);
             }
             catch (SharpGenException error) when (error.ResultCode.Code == NoMoreTypes)
             {
@@ -254,7 +383,7 @@ internal sealed class H264Encoder : IDisposable
     {
         try
         {
-            using var attributes = _transform.GetInputStreamAttributes(0);
+            using var attributes = _transform.GetInputStreamAttributes(_inputStreamId);
             return attributes.GetUInt32(TransformAttributeKeys.D3D11Bindflags, out uint flags).Success ? (BindFlags)flags : BindFlags.None;
         }
         catch (SharpGenException)
@@ -333,7 +462,11 @@ internal sealed class H264Encoder : IDisposable
         while (true)
         {
             if (!_providesSamples) ResetOutputSample();
-            var output = new NativeOutputDataBuffer { Sample = _providesSamples ? IntPtr.Zero : _outputSample!.NativePointer };
+            var output = new NativeOutputDataBuffer
+            {
+                StreamId = (uint)_outputStreamId,
+                Sample = _providesSamples ? IntPtr.Zero : _outputSample!.NativePointer,
+            };
             uint status;
             var result = new Result(processOutput(_transform.NativePointer, 0, 1, &output, &status));
             if (output.Events != IntPtr.Zero) Marshal.Release(output.Events);
@@ -344,8 +477,8 @@ internal sealed class H264Encoder : IDisposable
                 if (result == Vortice.MediaFoundation.ResultCode.TransformNeedMoreInput) return false;
                 if (result != Vortice.MediaFoundation.ResultCode.TransformStreamChange) result.CheckError();
                 // The encoder changed its output format: accept the new one and ask again.
-                using var type = _transform.GetOutputAvailableType(0, 0);
-                _transform.SetOutputType(0, type, 0);
+                using var type = _transform.GetOutputAvailableType(_outputStreamId, 0);
+                _transform.SetOutputType(_outputStreamId, type, 0);
                 continue;
             }
 
@@ -388,57 +521,13 @@ internal sealed class H264Encoder : IDisposable
         return new EncodedFrame(bytes, keyFrame);
     }
 
-    private void PumpEvents()
-    {
-        try
-        {
-            while (true)
-            {
-                using var e = _events!.GetEvent(0);
-                switch (e.EventType)
-                {
-                    case MediaEventTypes.TransformNeedInput:
-                        _needInput.Release();
-                        break;
-                    case MediaEventTypes.TransformHaveOutput:
-                        _haveOutput.Release();
-                        break;
-                    case MediaEventTypes.Error:
-                        _eventError = EncoderFactory.Describe(e.Status);
-                        _needInput.Release();
-                        _haveOutput.Release();
-                        return;
-                }
-            }
-        }
-        catch (SharpGenException)
-        {
-            // GetEvent fails once the encoder is shut down: the normal way out.
-        }
-        catch (ObjectDisposedException)
-        {
-        }
-    }
-
-    private void ThrowIfEncoderFailed()
-    {
-        if (_eventError is { } error) throw new InvalidOperationException($"The encoder reported {error}.");
-    }
-
     public void Dispose()
     {
-        try
+        if (_worker is not null)
         {
-            _transform.ProcessMessage(TMessageType.MessageNotifyEndOfStream, 0);
-            _transform.ProcessMessage(TMessageType.MessageNotifyEndStreaming, 0);
-        }
-        catch (SharpGenException)
-        {
-            // Not started, or already broken: nothing to end.
-        }
-        if (_events is not null)
-        {
-            // Shutting a hardware encoder down makes its pending GetEvent fail, which stops the pump.
+            // Stop the worker first: cancel its wait for a frame, and shut the encoder down, which makes a pending
+            // GetEvent fail. Only then may this thread call the transform.
+            _stopping.Cancel();
             try
             {
                 using var shutdown = _transform.QueryInterfaceOrNull<IMFShutdown>();
@@ -447,17 +536,32 @@ internal sealed class H264Encoder : IDisposable
             catch (SharpGenException)
             {
             }
+            _worker.Join(TimeSpan.FromSeconds(1));
         }
+        else
+        {
+            try
+            {
+                _transform.ProcessMessage(TMessageType.MessageNotifyEndOfStream, 0);
+                _transform.ProcessMessage(TMessageType.MessageNotifyEndStreaming, 0);
+            }
+            catch (SharpGenException)
+            {
+                // Not started, or already broken: nothing to end.
+            }
+        }
+
         _activate.ShutdownObject();
-        _eventPump?.Join(TimeSpan.FromSeconds(1));
+        while (_inbox.TryTake(out var unused)) unused.Dispose();
         _events?.Dispose();
         _outputSample?.Dispose();
         _staging?.Dispose();
         _transform.Dispose();
         _activate.Dispose();
         _deviceManager?.Dispose();
-        _needInput.Dispose();
-        _haveOutput.Dispose();
+        _inbox.Dispose();
+        _outbox.Dispose();
+        _stopping.Dispose();
     }
 
     /// <summary>MFT_OUTPUT_DATA_BUFFER (mftransform.h).</summary>
