@@ -32,7 +32,7 @@ internal sealed class CaptureLoop : IDisposable
     private const uint WaitMs = 100;
     private const int RetryMs = 250;
 
-    private readonly bool _allowHardwareEncoder;
+    private readonly EncoderKind[] _kinds;
     private readonly Thread _thread;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly CaptureStats _stats = new();
@@ -43,6 +43,9 @@ internal sealed class CaptureLoop : IDisposable
     // Used by the capture thread only.
     private Nv12Converter? _converter;
     private H264Encoder? _encoder;
+    /// <summary>Which of <see cref="_kinds"/> to try next; moves on when an encoder fails.</summary>
+    private int _kindIndex;
+    private readonly List<string> _encoderFailures = [];
 
     // Shared with the window: read and written under _lock.
     private bool _capturing;
@@ -62,7 +65,7 @@ internal sealed class CaptureLoop : IDisposable
     /// <param name="allowHardwareEncoder">False uses the software encoder only (<c>--software-encoder</c>).</param>
     public CaptureLoop(bool allowHardwareEncoder = true)
     {
-        _allowHardwareEncoder = allowHardwareEncoder;
+        _kinds = allowHardwareEncoder ? EncoderFactory.AllKinds : [EncoderKind.Software];
         _thread = new Thread(Run) { IsBackground = true, Name = "Sheron capture" };
         // Media Foundation needs COM; an MTA thread has it set up when it starts.
         _thread.SetApartmentState(ApartmentState.MTA);
@@ -177,28 +180,33 @@ internal sealed class CaptureLoop : IDisposable
         }
     }
 
+    /// <summary>Starts the best encoder route that works, from <see cref="_kindIndex"/> down the list.</summary>
     private void StartEncoder(DesktopDuplicator duplicator)
     {
         var settings = VideoSettings.ForScreen(duplicator.Width, duplicator.Height);
-        try
+        for (; _kindIndex < _kinds.Length; _kindIndex++)
         {
-            _encoder = EncoderFactory.Create(duplicator.Device, duplicator.Context, settings, _allowHardwareEncoder,
-                out var failures);
-            string tried = failures.Count == 0 ? "" : $" (tried first: {string.Join(" · ", failures)})";
-            if (_encoder is null)
+            var kind = _kinds[_kindIndex];
+            try
             {
-                SetEncoder("none" + (failures.Count == 0 ? ": no H.264 encoder found" : tried), "–");
+                _encoder = EncoderFactory.Create(duplicator.Device, duplicator.Context, settings, kind,
+                    duplicator.AdapterVendorId, out var failures);
+                _encoderFailures.AddRange(failures);
+                if (_encoder is null) continue;
+                _converter = new Nv12Converter(duplicator.Device, duplicator.Context, duplicator.Width, duplicator.Height,
+                    settings, _encoder.InputBindFlags);
+                string textures = kind == EncoderKind.HardwareGpu ? $" · input textures 0x{(uint)_converter.BindFlags:X}" : "";
+                SetEncoder($"{_encoder.Name} · {EncoderFactory.Describe(kind)}{TriedFirst()}",
+                    string.Join(" · ", _encoder.Settings) + textures);
                 return;
             }
-            _converter = new Nv12Converter(duplicator.Device, duplicator.Context, duplicator.Width, duplicator.Height, settings);
-            string kind = _encoder.IsHardware ? "hardware" : "software";
-            SetEncoder($"{_encoder.Name} · {kind}{tried}", string.Join(" · ", _encoder.Settings));
+            catch (Exception error)
+            {
+                _encoderFailures.Add($"{EncoderFactory.Describe(kind)}: {EncoderFactory.Describe(error)}");
+                StopEncoder();
+            }
         }
-        catch (Exception error)
-        {
-            StopEncoder();
-            SetEncoder("failed: " + EncoderFactory.Describe(error), "–");
-        }
+        SetEncoder("none" + TriedFirst(), "–");
     }
 
     private void EncodeLatest(DesktopDuplicator duplicator)
@@ -216,11 +224,16 @@ internal sealed class CaptureLoop : IDisposable
         }
         catch (Exception error)
         {
-            string name = _encoder.Name;
+            // This route does not work on this PC: fall back to the next one.
+            _encoderFailures.Add($"{_encoder.Details}: {EncoderFactory.Describe(error)}");
             StopEncoder();
-            SetEncoder($"{name} stopped: {EncoderFactory.Describe(error)}", "–");
+            _kindIndex++;
+            StartEncoder(duplicator);
         }
     }
+
+    private string TriedFirst() =>
+        _encoderFailures.Count == 0 ? "" : $" (tried first: {string.Join(" · ", _encoderFailures)})";
 
     private void SetEncoder(string name, string settings)
     {

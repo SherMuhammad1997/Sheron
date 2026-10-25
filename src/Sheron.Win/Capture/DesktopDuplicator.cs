@@ -68,7 +68,9 @@ internal sealed class DesktopDuplicator : IDisposable
         _context = context;
         _duplication = duplication;
 
-        AdapterName = adapter.Description1.Description;
+        var adapterDescription = adapter.Description1;
+        AdapterName = adapterDescription.Description;
+        AdapterVendorId = adapterDescription.VendorId;
         MonitorName = output.Description.DeviceName;
         var mode = duplication.Description.ModeDescription;
         Width = (int)mode.Width;
@@ -76,6 +78,10 @@ internal sealed class DesktopDuplicator : IDisposable
     }
 
     public string AdapterName { get; }
+
+    /// <summary>PCI vendor of the graphics adapter (0x8086 Intel, 0x10DE NVIDIA, 0x1002 AMD).</summary>
+    public uint AdapterVendorId { get; }
+
     public string MonitorName { get; }
     public int Width { get; }
     public int Height { get; }

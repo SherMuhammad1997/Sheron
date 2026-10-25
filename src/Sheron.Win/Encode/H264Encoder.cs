@@ -7,13 +7,24 @@ using Vortice.MediaFoundation;
 
 namespace Sheron.Win.Encode;
 
+/// <summary>Encoder routes, best first (TRD › Video path). The capture loop falls back down this list.</summary>
+internal enum EncoderKind
+{
+    /// <summary>Hardware encoder reading the NV12 GPU texture directly.</summary>
+    HardwareGpu,
+    /// <summary>Hardware encoder fed a CPU copy of the frame.</summary>
+    HardwareMemory,
+    /// <summary>Microsoft software encoder fed a CPU copy of the frame.</summary>
+    Software,
+}
+
 /// <summary>One encoded H.264 frame in Annex B form (with start codes).</summary>
 internal sealed record EncodedFrame(byte[] Data, bool KeyFrame);
 
 /// <summary>
-/// One H.264 encoder: a Media Foundation transform (TRD › Video path). A hardware encoder is fed the NV12 GPU
-/// texture directly and is asynchronous: its events say when it wants input and when output is ready. The software
-/// encoder gets a CPU copy and answers at once. Not thread-safe: the capture thread owns it.
+/// One H.264 encoder: a Media Foundation transform (TRD › Video path). Hardware encoders are asynchronous: their
+/// events say when they want input and when output is ready. The software encoder answers at once.
+/// Not thread-safe: the capture thread owns it.
 /// </summary>
 internal sealed class H264Encoder : IDisposable
 {
@@ -48,12 +59,12 @@ internal sealed class H264Encoder : IDisposable
     private ID3D11Texture2D? _staging;
 
     /// <summary>Takes ownership of <paramref name="activate"/>.</summary>
-    public H264Encoder(IMFActivate activate, string name, bool hardware, ID3D11Device device,
+    public H264Encoder(IMFActivate activate, string name, EncoderKind kind, ID3D11Device device,
         ID3D11DeviceContext context, VideoSettings settings)
     {
         _activate = activate;
         Name = name;
-        IsHardware = hardware;
+        Kind = kind;
         _device = device;
         _context = context;
         _settings = settings;
@@ -61,10 +72,18 @@ internal sealed class H264Encoder : IDisposable
     }
 
     public string Name { get; }
-    public bool IsHardware { get; }
+    public EncoderKind Kind { get; }
+    public bool IsHardware => Kind != EncoderKind.Software;
+    private bool UsesGpuInput => Kind == EncoderKind.HardwareGpu;
+
+    /// <summary>Extra bind flags the encoder asks for on its input textures (MF_SA_D3D11_BINDFLAGS); GPU input only.</summary>
+    public BindFlags InputBindFlags { get; private set; }
 
     /// <summary>One line per encoder setting with ✓ or ✗, for the capture test window.</summary>
     public IReadOnlyList<string> Settings { get; private set; } = [];
+
+    /// <summary>Facts that help when this encoder fails, for test messages and the test window.</summary>
+    public string Details => $"{Name}, {Kind}, provides samples: {_providesSamples}, input bind flags: 0x{(uint)InputBindFlags:X}";
 
     /// <summary>Frames the encoder kept instead of answering at once; above 0 means low latency is not working.</summary>
     public int HeldBack { get; private set; }
@@ -75,8 +94,11 @@ internal sealed class H264Encoder : IDisposable
         if (IsHardware)
         {
             // A hardware encoder stays locked until the caller says it handles asynchronous transforms.
-            using (var attributes = _transform.Attributes)
-                attributes.Set(TransformAttributeKeys.TransformAsyncUnlock, 1u).CheckError();
+            using var attributes = _transform.Attributes;
+            attributes.Set(TransformAttributeKeys.TransformAsyncUnlock, 1u).CheckError();
+        }
+        if (UsesGpuInput)
+        {
             _deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
             _deviceManager.ResetDevice(_device).CheckError();
             _transform.ProcessMessage(TMessageType.MessageSetD3DManager, (nuint)_deviceManager.NativePointer);
@@ -94,6 +116,7 @@ internal sealed class H264Encoder : IDisposable
         }
         using (var input = CreateType(VideoFormatGuids.NV12))
             _transform.SetInputType(0, input, 0);
+        if (UsesGpuInput) InputBindFlags = ReadInputBindFlags();
 
         var info = _transform.GetOutputStreamInfo(0);
         const int provides = (int)(OutputStreamInfoFlags.OutputStreamProvidesSamples | OutputStreamInfoFlags.OutputStreamCanProvideSamples);
@@ -121,7 +144,7 @@ internal sealed class H264Encoder : IDisposable
     /// </summary>
     public IReadOnlyList<EncodedFrame> Encode(ID3D11Texture2D nv12, TimeSpan at)
     {
-        using var sample = IsHardware ? GpuSample(nv12) : CpuSample(nv12);
+        using var sample = UsesGpuInput ? GpuSample(nv12) : CpuSample(nv12);
         sample.SampleTime = at.Ticks;
         sample.SampleDuration = TimeSpan.TicksPerSecond / _settings.FramesPerSecond;
 
@@ -178,7 +201,21 @@ internal sealed class H264Encoder : IDisposable
         }
     }
 
-    /// <summary>Hardware path: the encoder reads the GPU texture itself.</summary>
+    /// <summary>The bind flags a GPU-input encoder wants on input textures, if it says (MF_SA_D3D11_BINDFLAGS).</summary>
+    private BindFlags ReadInputBindFlags()
+    {
+        try
+        {
+            using var attributes = _transform.GetInputStreamAttributes(0);
+            return attributes.GetUInt32(TransformAttributeKeys.D3D11Bindflags, out uint flags).Success ? (BindFlags)flags : BindFlags.None;
+        }
+        catch (SharpGenException)
+        {
+            return BindFlags.None;
+        }
+    }
+
+    /// <summary>GPU input: the encoder reads the texture itself.</summary>
     private static IMFSample GpuSample(ID3D11Texture2D nv12)
     {
         using var buffer = MediaFactory.MFCreateDXGISurfaceBuffer(typeof(ID3D11Texture2D).GUID, nv12, 0, false);
@@ -189,7 +226,7 @@ internal sealed class H264Encoder : IDisposable
         return sample;
     }
 
-    /// <summary>Software path: copy the NV12 frame from the GPU into memory, Y rows then UV rows, without padding.</summary>
+    /// <summary>Memory input: copy the NV12 frame from the GPU, Y rows then UV rows, without padding.</summary>
     private unsafe IMFSample CpuSample(ID3D11Texture2D nv12)
     {
         int width = _settings.Width, height = _settings.Height;

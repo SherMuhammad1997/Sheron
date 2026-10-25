@@ -24,7 +24,9 @@ internal sealed class Nv12Converter : IDisposable
     private ID3D11VideoProcessorInputView? _inputView;
     private int _next;
 
-    public Nv12Converter(ID3D11Device device, ID3D11DeviceContext context, int screenWidth, int screenHeight, VideoSettings settings)
+    /// <param name="encoderBindFlags">Bind flags the encoder asks for on its input textures (GPU input only).</param>
+    public Nv12Converter(ID3D11Device device, ID3D11DeviceContext context, int screenWidth, int screenHeight,
+        VideoSettings settings, BindFlags encoderBindFlags = BindFlags.None)
     {
         _videoDevice = device.QueryInterface<ID3D11VideoDevice>();
         _videoContext = context.QueryInterface<ID3D11VideoContext>();
@@ -63,13 +65,33 @@ internal sealed class Nv12Converter : IDisposable
             Format = Format.NV12,
             SampleDescription = SampleDescription.Default,
             Usage = ResourceUsage.Default,
-            BindFlags = BindFlags.RenderTarget,
+            // Render target for the video processor; shader resource as most encoders expect; plus what the encoder asks.
+            BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource | encoderBindFlags,
         };
+        if (!CanCreate(device, nv12)) nv12.BindFlags = BindFlags.RenderTarget | encoderBindFlags;
+        BindFlags = nv12.BindFlags;
+
         var view = new VideoProcessorOutputViewDescription { ViewDimension = VideoProcessorOutputViewDimension.Texture2D };
         for (int i = 0; i < PoolSize; i++)
         {
             _outputs[i] = device.CreateTexture2D(nv12);
             _outputViews[i] = _videoDevice.CreateVideoProcessorOutputView(_outputs[i], _enumerator, view);
+        }
+    }
+
+    /// <summary>Bind flags the NV12 textures were made with, for the test window.</summary>
+    public BindFlags BindFlags { get; }
+
+    private static bool CanCreate(ID3D11Device device, Texture2DDescription description)
+    {
+        try
+        {
+            using var texture = device.CreateTexture2D(description);
+            return true;
+        }
+        catch (SharpGen.Runtime.SharpGenException)
+        {
+            return false;
         }
     }
 

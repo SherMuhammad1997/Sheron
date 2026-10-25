@@ -3,6 +3,7 @@ using Sheron.Win.Capture;
 namespace Sheron.Win.Tests.Capture;
 
 /// <summary>Needs a real, unlocked Windows desktop: run from Sher's PC, not over Remote Desktop.</summary>
+[Collection(DesktopDuplication.Collection)]
 public class DesktopDuplicatorTests
 {
     [Fact]

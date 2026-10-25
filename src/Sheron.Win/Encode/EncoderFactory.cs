@@ -5,29 +5,36 @@ using Vortice.MediaFoundation;
 
 namespace Sheron.Win.Encode;
 
-/// <summary>Finds and starts an H.264 encoder: hardware first, then the Microsoft software encoder (TRD › Video path).</summary>
+/// <summary>Finds and starts an H.264 encoder of one <see cref="EncoderKind"/> (TRD › Video path).</summary>
 internal static class EncoderFactory
 {
     private static readonly Lazy<Result> MediaFoundationStarted = new(() => MediaFactory.MFStartup());
 
-    /// <param name="allowHardware">False skips hardware encoders (the <c>--software-encoder</c> test switch).</param>
+    /// <summary>The order the capture loop tries: hardware with GPU input, hardware with memory input, software.</summary>
+    public static readonly EncoderKind[] AllKinds = [EncoderKind.HardwareGpu, EncoderKind.HardwareMemory, EncoderKind.Software];
+
+    /// <param name="adapterVendorId">The capture adapter's vendor: a hardware encoder of another GPU cannot use its frames.</param>
     /// <param name="failures">Encoders that were tried and failed, with the reason.</param>
     public static H264Encoder? Create(ID3D11Device device, ID3D11DeviceContext context, VideoSettings settings,
-        bool allowHardware, out IReadOnlyList<string> failures)
+        EncoderKind kind, uint adapterVendorId, out IReadOnlyList<string> failures)
     {
         MediaFoundationStarted.Value.CheckError();
         var tried = new List<string>();
         failures = tried;
 
-        if (allowHardware)
-        {
-            var hardware = StartFirst(Find(EnumFlag.EnumFlagHardware | EnumFlag.EnumFlagSortandfilter), true,
-                device, context, settings, tried);
-            if (hardware is not null) return hardware;
-        }
-        return StartFirst(Find(EnumFlag.EnumFlagSyncmft | EnumFlag.EnumFlagLocalmft | EnumFlag.EnumFlagSortandfilter), false,
-            device, context, settings, tried);
+        var candidates = kind == EncoderKind.Software
+            ? Find(EnumFlag.EnumFlagSyncmft | EnumFlag.EnumFlagLocalmft | EnumFlag.EnumFlagSortandfilter, null)
+            : Find(EnumFlag.EnumFlagHardware | EnumFlag.EnumFlagSortandfilter, $"VEN_{adapterVendorId:X4}");
+        if (candidates.Count == 0) tried.Add($"{Describe(kind)}: none found");
+        return StartFirst(candidates, kind, device, context, settings, tried);
     }
+
+    public static string Describe(EncoderKind kind) => kind switch
+    {
+        EncoderKind.HardwareGpu => "hardware, GPU input",
+        EncoderKind.HardwareMemory => "hardware, memory input",
+        _ => "software",
+    };
 
     public static string Describe(Exception error) =>
         error is SharpGenException com ? Describe(com.ResultCode) : error.Message;
@@ -35,7 +42,7 @@ internal static class EncoderFactory
     public static string Describe(Result result) =>
         $"{(string.IsNullOrEmpty(result.ApiCode) ? "error" : result.ApiCode)} (0x{result.Code:X8})";
 
-    private static H264Encoder? StartFirst(List<(IMFActivate Activate, string Name)> candidates, bool hardware,
+    private static H264Encoder? StartFirst(List<(IMFActivate Activate, string Name)> candidates, EncoderKind kind,
         ID3D11Device device, ID3D11DeviceContext context, VideoSettings settings, List<string> tried)
     {
         H264Encoder? started = null;
@@ -50,13 +57,13 @@ internal static class EncoderFactory
             H264Encoder? encoder = null;
             try
             {
-                encoder = new H264Encoder(activate, name, hardware, device, context, settings);
+                encoder = new H264Encoder(activate, name, kind, device, context, settings);
                 encoder.Start();
                 started = encoder;
             }
             catch (Exception error)
             {
-                tried.Add($"{name}: {Describe(error)}");
+                tried.Add($"{name} ({Describe(kind)}): {Describe(error)}");
                 if (encoder is not null)
                 {
                     encoder.Dispose();
@@ -71,8 +78,8 @@ internal static class EncoderFactory
         return started;
     }
 
-    /// <summary>Encoders that take NV12 and make H.264, best first.</summary>
-    private static List<(IMFActivate Activate, string Name)> Find(EnumFlag flags)
+    /// <summary>Encoders that take NV12 and make H.264, best first; hardware ones only for the given vendor.</summary>
+    private static List<(IMFActivate Activate, string Name)> Find(EnumFlag flags, string? vendor)
     {
         var input = new RegisterTypeInfo { GuidMajorType = MediaTypeGuids.Video, GuidSubtype = VideoFormatGuids.NV12 };
         var output = new RegisterTypeInfo { GuidMajorType = MediaTypeGuids.Video, GuidSubtype = VideoFormatGuids.H264 };
@@ -80,21 +87,24 @@ internal static class EncoderFactory
         using var all = MediaFactory.MFTEnumEx(TransformCategoryGuids.VideoEncoder, (uint)flags, input, output);
         foreach (var activate in all)
         {
+            if (vendor is not null && ReadString(activate, TransformAttributeKeys.MftEnumHardwareVendorIdAttribute) is { } vendorId
+                && !vendorId.Equals(vendor, StringComparison.OrdinalIgnoreCase))
+                continue;
             // Our own reference, so the encoder outlives the list.
-            found.Add((activate.QueryInterface<IMFActivate>(), NameOf(activate)));
+            found.Add((activate.QueryInterface<IMFActivate>(), ReadString(activate, TransformAttributeKeys.MftFriendlyNameAttribute) ?? "Unnamed H.264 encoder"));
         }
         return found;
     }
 
-    private static string NameOf(IMFActivate activate)
+    private static string? ReadString(IMFActivate activate, Guid key)
     {
         try
         {
-            return activate.GetString(TransformAttributeKeys.MftFriendlyNameAttribute);
+            return activate.GetString(key);
         }
         catch (SharpGenException)
         {
-            return "Unnamed H.264 encoder";
+            return null;
         }
     }
 }

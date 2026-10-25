@@ -14,6 +14,12 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-10-25 — Windows test: DuplicateOutput fails with E_INVALIDARG (0x80070057)  (Plan step 4)
+Symptom:     `The_main_monitor_gives_a_first_frame_with_the_whole_desktop` failed in `DesktopDuplicator.Open` with E_INVALIDARG, although it passed in step 3.
+Root cause:  xUnit runs test classes in parallel. EncoderTests opened the screen at the same time, and Windows lets one program duplicate a screen only once at a time; the second DuplicateOutput fails with E_INVALIDARG.
+Exact fix:   Every test class that opens the screen carries `[Collection(DesktopDuplication.Collection)]`, so they run one after another. In the app only the capture loop opens the screen. Do not run the capture test window and the tests at the same time.
+Files:       `tests/Sheron.Win.Tests/DesktopDuplication.cs`, `tests/Sheron.Win.Tests/Capture/DesktopDuplicatorTests.cs`, `tests/Sheron.Win.Tests/Encode/EncoderTests.cs`
+
 ### 2026-10-25 — Linux build: "Microsoft.NET.Sdk.WindowsDesktop.targets was not found"  (Plan step 2)
 Symptom:     In the Claude Code cloud session, `dotnet sln add` and `dotnet build` said the imported project `…/Sdks/Microsoft.NET.Sdk.WindowsDesktop/targets/Microsoft.NET.Sdk.WindowsDesktop.targets` was not found for Sheron.Win and Sheron.Win.Tests.
 Root cause:  Ubuntu's own `dotnet-sdk-8.0` package (8.0.1xx, built from source by Canonical) leaves out the Windows Desktop SDK, so `EnableWindowsTargeting` cannot work with it. The usual Microsoft download (dot.net → builds.dotnet.microsoft.com) is blocked by the session's network proxy.
