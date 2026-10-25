@@ -56,7 +56,10 @@ internal static class CodecApi
             if (options.KeyFrameInterval)
                 applied.Add(Set(codec, GopSize, (uint)settings.KeyFrameInterval, $"keyframe every {settings.KeyFrameInterval}"));
             if (options.Scenario != 0)
-                applied.Add(Set(codec, ScenarioInfo, options.Scenario, $"scenario {options.Scenario}"));
+            {
+                string name = options.Scenario == EncoderOptions.DisplayRemoting ? "display remoting" : $"scenario {options.Scenario}";
+                applied.Add(Set(codec, ScenarioInfo, options.Scenario, name));
+            }
             return applied.Count > 0 ? applied : ["encoder defaults"];
         }
         finally

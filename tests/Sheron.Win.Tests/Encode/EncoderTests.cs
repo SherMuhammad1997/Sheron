@@ -24,31 +24,29 @@ public class EncoderTests
         OnMtaThread(() => AssertEncodes(EncoderKind.Software));
 
     /// <summary>
-    /// Plan step 4 check: drives the hardware encoder in different ways, to find what it accepts. Earlier runs
-    /// showed Intel Quick Sync fails with E_UNEXPECTED when output is collected in low-latency mode.
-    /// Fails, listing every result, unless the TRD settings (the last line) work.
+    /// Plan step 4 check: drives the hardware encoder in different ways and says how many frames it needed before
+    /// the first output. Intel Quick Sync fails with E_UNEXPECTED on its first output unless the scenario is
+    /// display remoting (25 Oct). Fails, listing every result, unless the TRD settings (the last line) give
+    /// output for the very first frame.
     /// </summary>
     [Fact]
     public void Hardware_encoder_settings_check() => OnMtaThread(() =>
     {
-        var noLowLatency = EncoderOptions.Default with { LowLatency = false, LowLatencyAttribute = false };
-        var variants = new (string Name, EncoderOptions Options, int Frames, int Bitrate)[]
+        var trd = EncoderOptions.Default;
+        var variants = new (string Name, EncoderOptions Options, int Frames)[]
         {
-            ("1 no low latency, up to 30 frames", noLowLatency, 30, 8_000_000),
-            ("2 display remoting, no low latency, up to 30 frames", noLowLatency with { Scenario = 1 }, 30, 8_000_000),
-            ("3 low latency, we provide the output buffer", EncoderOptions.Default with { CallerAllocatesOutput = true }, 1, 8_000_000),
-            ("4 low latency, output through Vortice", EncoderOptions.Default with { VorticeProcessOutput = true }, 1, 8_000_000),
-            ("5 low latency, aligned input buffer", EncoderOptions.Default with { AlignedInput = true }, 1, 8_000_000),
-            ("6 low latency through MF_LOW_LATENCY only", EncoderOptions.Default with { LowLatency = false }, 1, 8_000_000),
-            ("7 low latency through ICodecAPI only", EncoderOptions.Default with { LowLatencyAttribute = false }, 1, 8_000_000),
-            ("8 TRD settings at 30 Mbps", EncoderOptions.Default, 1, 30_000_000),
-            ("9 encoder's own types, we provide the output buffer", EncoderOptions.Default with { OfferedTypes = true, CallerAllocatesOutput = true }, 1, 8_000_000),
-            ("10 TRD settings", EncoderOptions.Default, 1, 8_000_000),
+            ("1 without display remoting (old settings)", trd with { Scenario = 0 }, 30),
+            ("2 display remoting, no low latency", trd with { LowLatency = false, LowLatencyAttribute = false }, 30),
+            ("3 display remoting, low latency through ICodecAPI only", trd with { LowLatencyAttribute = false }, 30),
+            ("4 display remoting, low latency through MF_LOW_LATENCY only", trd with { LowLatency = false }, 30),
+            ("5 display remoting, low latency, encoder's own types", trd with { OfferedTypes = true }, 30),
+            ("6 TRD settings, up to 30 frames", trd, 30),
+            ("7 TRD settings: first frame must come straight back", trd, 1),
         };
 
         using var duplicator = OpenWithFirstFrame();
         var results = variants
-            .Select(v => (v.Name, Result: TryEncode(duplicator, EncoderKind.HardwareMemory, v.Options, maxFrames: v.Frames, bitsPerSecond: v.Bitrate)))
+            .Select(v => (v.Name, Result: TryEncode(duplicator, EncoderKind.HardwareMemory, v.Options, maxFrames: v.Frames)))
             .ToList();
         string report = string.Join(Environment.NewLine, results.Select(r => $"{r.Name}: {r.Result.Text}"));
         Assert.True(results[^1].Result.Ok, Environment.NewLine + report);
