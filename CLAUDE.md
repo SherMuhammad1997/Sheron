@@ -39,7 +39,8 @@ A simple, fast remote-desktop app for Windows: connect to any PC in the world by
 
 | Area | Rule |
 | --- | --- |
-| Stack | C# 12 / .NET 8. `Sheron.Core` (net8.0, no Windows code), `Sheron.Win` (net8.0-windows), `Sheron.Server` (net8.0, Linux), `Sheron.Sim`, `tests/` (xUnit, net8.0-windows) |
+| Stack | C# 12 / .NET 8. `Sheron.Core` (net8.0, no Windows code), `Sheron.Win` (net8.0-windows), `Sheron.Server` (net8.0, Linux), `Sheron.Sim`, `tests/Sheron.Tests` (xUnit, net8.0, runs on Linux too), `tests/Sheron.Win.Tests` (xUnit, net8.0-windows, Windows only) |
+| Linux builds | Claude Code cloud sessions run on Linux: `dotnet build` builds everything (`EnableWindowsTargeting`), `dotnet test` runs `Sheron.Tests` only. Win tests are confirmed on Sher's PC |
 | Speed first | Every change to the video or input path reports its time per frame; no change may push a PRD target over its limit |
 | Windows UI | WinForms, custom-painted. Keep native control count LOW — Sher's PC runs window-hooking software that costs ~40 ms per control. Real controls only for text boxes and dropdowns |
 | Network | Direct UDP first, relay second, TCP 443 last. Packets ≤ 1,200 bytes |

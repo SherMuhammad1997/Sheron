@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Windows target so the Win project's helpers (DPAPI, capture, input) can be tested. -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+
+    <IsPackable>false</IsPackable>
+    <!-- Builds everywhere, but only Windows can run it: on Linux dotnet test skips it (TRD › Projects). -->
+    <IsTestProject>false</IsTestProject>
+    <IsTestProject Condition="'$(OS)' == 'Windows_NT'">true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Sheron.Core\Sheron.Core.csproj" />
+    <ProjectReference Include="..\..\src\Sheron.Win\Sheron.Win.csproj" />
+  </ItemGroup>
+
+</Project>

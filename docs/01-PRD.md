@@ -74,13 +74,15 @@ File transfer, clipboard sync, chat, sound, session recording, more than one mon
 | 25 Oct | Repository name Sheron, private |
 | 25 Oct | Version 1 is Windows ↔ Windows only |
 | 25 Oct | Simple app, few features, speed first |
+| 25 Oct | #1 UI style: Control Room (same as Virtual Repeater, drawn in the design canvas) |
+| 25 Oct | #2 Server: Alibaba Cloud Hong Kong (best route in the 25 Oct test) |
+| 25 Oct | Unattended access (F5) is in version 1 |
+| 25 Oct | Version 1 shows the main monitor only; no file transfer or clipboard |
 
 ## Decisions still open — ask Sher
 
 | # | Question | Needed before |
 | --- | --- | --- |
-| 1 | UI style: Control Room proposed (same as Virtual Repeater, drawn in the design canvas) | Step 15 |
-| 2 | Server: Alibaba Cloud Hong Kong proposed (best route in the 25 Oct test) | Step 13 |
 | 3 | Domain name for the server | Step 13 |
 | 4 | Installer tool: Inno Setup proposed | Step 19 |
 | 5 | Code-signing certificate: standard or EV | Step 20 |

@@ -25,9 +25,10 @@ This is document 2 of 3. The drawing is also on the design canvas (board 5).
 | `src/Sheron.Win` | net8.0-windows | WinForms app, screen capture, encoder, decoder, renderer, input, Windows service |
 | `src/Sheron.Server` | net8.0 (Linux) | ID registry, signalling, address check, relay |
 | `src/Sheron.Sim` | net8.0 | Bad-network simulator (delay, jitter, loss, UDP blocked) used by tests and by hand |
-| `tests/Sheron.Tests` | net8.0-windows | xUnit tests |
+| `tests/Sheron.Tests` | net8.0 | xUnit tests for Core, Server and Sim; run on Windows and on Linux (cloud sessions, the server) |
+| `tests/Sheron.Win.Tests` | net8.0-windows | xUnit tests for Win (DPAPI, capture, input helpers); run on Windows only |
 
-Language: C# 12, .NET 8.
+Language: C# 12, .NET 8. `global.json` accepts any .NET 8 SDK from 8.0.100 up. The Windows projects set `EnableWindowsTargeting`, so the whole solution also builds on Linux; there `dotnet test` runs `Sheron.Tests` only (added 25 Oct: Claude Code cloud sessions run on Linux).
 
 ## Video path (remote PC → viewer)
 
@@ -65,7 +66,7 @@ Language: C# 12, .NET 8.
 
 | Item | Detail |
 | --- | --- |
-| Server | One server to start: Alibaba Cloud Hong Kong (PRD open decision 2). More regions later |
+| Server | One server to start: Alibaba Cloud Hong Kong (PRD decision #2). More regions later |
 | Stay online | Each PC keeps a TLS 1.3 connection to the server on TCP 443; heartbeat every 25 s |
 | Connect | Viewer asks the server for the ID; the server tells both sides each other's addresses (LAN and public) |
 | Direct link | Both sides send UDP probes to each other at the same time for up to 1.5 s (hole punching). A LAN address wins when both are on the same network |
@@ -114,7 +115,7 @@ Language: C# 12, .NET 8.
 | --- | --- |
 | Toolkit | WinForms, custom-painted. Keep native controls few: Sher's PC runs window-hooking software that costs about 40 ms per control. Real controls only for text boxes and dropdowns |
 | Video | The session window draws video with Direct3D 11 in one child window |
-| Style | Control Room (proposed): background #0E141B, panels #151E28, lines #243142, text #E6EDF3, muted #9FB0C3, accent amber #F2A93B, green #3FB871, red #E5534B. IBM Plex Sans / Mono, bundled |
+| Style | Control Room (PRD decision #1): background #0E141B, panels #151E28, lines #243142, text #E6EDF3, muted #9FB0C3, accent amber #F2A93B, green #3FB871, red #E5534B. IBM Plex Sans / Mono, bundled |
 | Screens | Home, session window, incoming request, banner, settings — see `docs/design/` |
 
 ## Third-party components (only these are approved)

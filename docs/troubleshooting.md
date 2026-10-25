@@ -14,4 +14,13 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
-None yet.
+### 2026-10-25 — Linux build: "Microsoft.NET.Sdk.WindowsDesktop.targets was not found"  (Plan step 2)
+Symptom:     In the Claude Code cloud session, `dotnet sln add` and `dotnet build` said the imported project `…/Sdks/Microsoft.NET.Sdk.WindowsDesktop/targets/Microsoft.NET.Sdk.WindowsDesktop.targets` was not found for Sheron.Win and Sheron.Win.Tests.
+Root cause:  Ubuntu's own `dotnet-sdk-8.0` package (8.0.1xx, built from source by Canonical) leaves out the Windows Desktop SDK, so `EnableWindowsTargeting` cannot work with it. The usual Microsoft download (dot.net → builds.dotnet.microsoft.com) is blocked by the session's network proxy.
+Exact fix:   Use Microsoft's own build from packages.microsoft.com, which the proxy allows:
+             1. Download the Ubuntu 22.04 feed's index: https://packages.microsoft.com/ubuntu/22.04/prod/dists/jammy/main/binary-amd64/Packages
+             2. From it, download the newest .deb of: dotnet-sdk-8.0 (8.0.427), dotnet-runtime-8.0, aspnetcore-runtime-8.0, dotnet-hostfxr-8.0, dotnet-host (8.0.x), dotnet-targeting-pack-8.0, aspnetcore-targeting-pack-8.0, dotnet-apphost-pack-8.0, netstandard-targeting-pack-2.1; check each SHA256 against the index.
+             3. Unpack each without installing: `dpkg-deb -x <file>.deb <folder>`.
+             4. `export DOTNET_ROOT=<folder>/usr/share/dotnet PATH=$DOTNET_ROOT:$PATH`; `dotnet --version` prints 8.0.427.
+             `global.json` accepts any 8.0 SDK from 8.0.100 up, so this SDK and Sher's Windows SDK both work. On Linux `dotnet test` skips Sheron.Win.Tests (its IsTestProject is true only on Windows).
+Files:       `global.json`, `src/Sheron.Win/Sheron.Win.csproj`, `tests/Sheron.Win.Tests/Sheron.Win.Tests.csproj`, `docs/02-TRD.md`, `CLAUDE.md`

@@ -1,6 +1,6 @@
 # Screen designs
 
-Five boards for version 1, in the Control Room style (proposed; PRD open decision 1). View them rendered on the design canvas: https://claude.ai/artifact/L74V7HCeYQdpD9D7UiXVyn
+Five boards for version 1, in the Control Room style (PRD decision #1, 25 Oct). View them rendered on the design canvas: https://claude.ai/artifact/L74V7HCeYQdpD9D7UiXVyn
 
 | Board | Shows | File |
 | --- | --- | --- |

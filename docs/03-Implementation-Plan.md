@@ -40,7 +40,7 @@ GATE 4: all 11 PRD acceptance checks pass
 | # | Step | Done when |
 | --- | --- | --- |
 | 1 | Create the private GitHub repository, the three documents, the design canvas copies in `docs/design/`, `CLAUDE.md` and an empty troubleshooting log | First commit pushed |
-| 2 | Create the .NET solution: `Sheron.Core`, `Sheron.Win`, `Sheron.Server`, `Sheron.Sim`, `tests/Sheron.Tests` | `dotnet build` and `dotnet test` pass |
+| 2 | Create the .NET solution: `Sheron.Core`, `Sheron.Win`, `Sheron.Server`, `Sheron.Sim`, `tests/Sheron.Tests`, `tests/Sheron.Win.Tests` | `dotnet build` and `dotnet test` pass on Linux and on Sher's PC |
 
 ## Phase 1 — Fast picture on one PC (Gate 1)
 
@@ -66,7 +66,7 @@ GATE 4: all 11 PRD acceptance checks pass
 | --- | --- | --- |
 | 11 | Server: ID registry and signalling over TLS on TCP 443 (runs on Linux) | Two local clients register, get IDs and find each other |
 | 12 | Server: address check, UDP hole punching, UDP relay, TCP 443 relay fallback | Simulator tests: blocked direct link uses the relay; blocked UDP uses TCP 443 |
-| 13 | Sher rents the server (PRD open decisions 2 and 3); deploy as a systemd service | `systemctl status sheron-server` shows active; a client registers from Sher's laptop |
+| 13 | Sher rents the Alibaba Cloud Hong Kong server and picks a domain (PRD open decision 3); deploy as a systemd service | `systemctl status sheron-server` shows active; a client registers from Sher's laptop |
 | 14 | Connect by ID over the internet | Sher's laptop on the hotspot connects to a second PC on another network; toolbar shows Direct or Relay |
 
 ## Phase 4 — Product (Gate 4)

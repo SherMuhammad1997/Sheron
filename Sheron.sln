@@ -1,0 +1,64 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{53472FDA-CB9F-4128-B59C-4E4392168326}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sheron.Core", "src\Sheron.Core\Sheron.Core.csproj", "{DFAFB936-E25D-43DD-839B-8FEB27FE8DC2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sheron.Win", "src\Sheron.Win\Sheron.Win.csproj", "{618C308B-276C-4426-8E97-E4551C0CA1CB}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sheron.Server", "src\Sheron.Server\Sheron.Server.csproj", "{74BDAEF7-8E53-4DDE-8379-E0EB472189C4}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sheron.Sim", "src\Sheron.Sim\Sheron.Sim.csproj", "{8B65F446-10A9-4816-BD76-AAECE031A978}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{32C3BE5A-0BC3-4CA0-A01C-DE9C940C5209}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sheron.Tests", "tests\Sheron.Tests\Sheron.Tests.csproj", "{F306BDE3-7363-4DE4-9FA3-E0EC708C3F65}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sheron.Win.Tests", "tests\Sheron.Win.Tests\Sheron.Win.Tests.csproj", "{5F1466C3-5D01-4BE7-BB09-AC0BC16301DE}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{DFAFB936-E25D-43DD-839B-8FEB27FE8DC2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DFAFB936-E25D-43DD-839B-8FEB27FE8DC2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DFAFB936-E25D-43DD-839B-8FEB27FE8DC2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DFAFB936-E25D-43DD-839B-8FEB27FE8DC2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{618C308B-276C-4426-8E97-E4551C0CA1CB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{618C308B-276C-4426-8E97-E4551C0CA1CB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{618C308B-276C-4426-8E97-E4551C0CA1CB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{618C308B-276C-4426-8E97-E4551C0CA1CB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{74BDAEF7-8E53-4DDE-8379-E0EB472189C4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{74BDAEF7-8E53-4DDE-8379-E0EB472189C4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{74BDAEF7-8E53-4DDE-8379-E0EB472189C4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{74BDAEF7-8E53-4DDE-8379-E0EB472189C4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8B65F446-10A9-4816-BD76-AAECE031A978}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8B65F446-10A9-4816-BD76-AAECE031A978}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8B65F446-10A9-4816-BD76-AAECE031A978}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8B65F446-10A9-4816-BD76-AAECE031A978}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F306BDE3-7363-4DE4-9FA3-E0EC708C3F65}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F306BDE3-7363-4DE4-9FA3-E0EC708C3F65}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F306BDE3-7363-4DE4-9FA3-E0EC708C3F65}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F306BDE3-7363-4DE4-9FA3-E0EC708C3F65}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5F1466C3-5D01-4BE7-BB09-AC0BC16301DE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5F1466C3-5D01-4BE7-BB09-AC0BC16301DE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5F1466C3-5D01-4BE7-BB09-AC0BC16301DE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5F1466C3-5D01-4BE7-BB09-AC0BC16301DE}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{DFAFB936-E25D-43DD-839B-8FEB27FE8DC2} = {53472FDA-CB9F-4128-B59C-4E4392168326}
+		{618C308B-276C-4426-8E97-E4551C0CA1CB} = {53472FDA-CB9F-4128-B59C-4E4392168326}
+		{74BDAEF7-8E53-4DDE-8379-E0EB472189C4} = {53472FDA-CB9F-4128-B59C-4E4392168326}
+		{8B65F446-10A9-4816-BD76-AAECE031A978} = {53472FDA-CB9F-4128-B59C-4E4392168326}
+		{F306BDE3-7363-4DE4-9FA3-E0EC708C3F65} = {32C3BE5A-0BC3-4CA0-A01C-DE9C940C5209}
+		{5F1466C3-5D01-4BE7-BB09-AC0BC16301DE} = {32C3BE5A-0BC3-4CA0-A01C-DE9C940C5209}
+	EndGlobalSection
+EndGlobal
