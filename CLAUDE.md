@@ -59,6 +59,7 @@ A simple, fast remote-desktop app for Windows: connect to any PC in the world by
 | `src/Sheron.Server` | ID, signalling and relay server |
 | `src/Sheron.Sim` | Bad-network simulator |
 | `tests/` | xUnit tests |
+| `third_party/libvpl` | Intel oneVPL dispatcher DLL (MIT), how it was built, and its checked struct layouts |
 
 ## Decisions still open — ask Sher, do not guess
 

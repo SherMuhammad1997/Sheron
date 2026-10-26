@@ -1,5 +1,6 @@
 using SharpGen.Runtime;
 using Sheron.Core.Video;
+using Sheron.Win.Encode.Vpl;
 using Vortice.Direct3D11;
 using Vortice.MediaFoundation;
 
@@ -8,20 +9,30 @@ namespace Sheron.Win.Encode;
 /// <summary>Finds and starts an H.264 encoder of one <see cref="EncoderKind"/> (TRD › Video path).</summary>
 internal static class EncoderFactory
 {
+    private const uint IntelVendorId = 0x8086;
+
     private static readonly Lazy<Result> MediaFoundationStarted = new(() => MediaFactory.MFStartup());
 
-    /// <summary>The order the capture loop tries: hardware with GPU input, hardware with memory input, software.</summary>
-    public static readonly EncoderKind[] AllKinds = [EncoderKind.HardwareGpu, EncoderKind.HardwareMemory, EncoderKind.Software];
+    /// <summary>
+    /// The order the capture loop tries: Intel oneVPL (Intel GPUs only), then Media Foundation hardware with GPU input,
+    /// with memory input, and the software encoder.
+    /// </summary>
+    public static readonly EncoderKind[] AllKinds =
+        [EncoderKind.IntelVpl, EncoderKind.HardwareGpu, EncoderKind.HardwareMemory, EncoderKind.Software];
 
     /// <param name="adapterVendorId">The capture adapter's vendor: a hardware encoder of another GPU cannot use its frames.</param>
+    /// <param name="adapterIndex">The capture adapter's index in DXGI's list (oneVPL picks its GPU by it).</param>
     /// <param name="failures">Encoders that were tried and failed, with the reason.</param>
-    public static H264Encoder? Create(ID3D11Device device, ID3D11DeviceContext context, VideoSettings settings,
-        EncoderKind kind, uint adapterVendorId, out IReadOnlyList<string> failures, EncoderOptions? options = null)
+    public static IVideoEncoder? Create(ID3D11Device device, ID3D11DeviceContext context, VideoSettings settings,
+        EncoderKind kind, uint adapterVendorId, uint adapterIndex, out IReadOnlyList<string> failures,
+        EncoderOptions? options = null)
     {
-        MediaFoundationStarted.Value.CheckError();
         var tried = new List<string>();
         failures = tried;
+        if (kind == EncoderKind.IntelVpl)
+            return StartIntel(device, context, settings, adapterVendorId, adapterIndex, options ?? EncoderOptions.Default, tried);
 
+        MediaFoundationStarted.Value.CheckError();
         var candidates = kind == EncoderKind.Software
             ? Find(EnumFlag.EnumFlagSyncmft | EnumFlag.EnumFlagLocalmft | EnumFlag.EnumFlagSortandfilter, null)
             : Find(EnumFlag.EnumFlagHardware | EnumFlag.EnumFlagSortandfilter, $"VEN_{adapterVendorId:X4}");
@@ -29,8 +40,33 @@ internal static class EncoderFactory
         return StartFirst(candidates, kind, device, context, settings, options, tried);
     }
 
+    private static VplEncoder? StartIntel(ID3D11Device device, ID3D11DeviceContext context, VideoSettings settings,
+        uint adapterVendorId, uint adapterIndex, EncoderOptions options, List<string> tried)
+    {
+        if (adapterVendorId != IntelVendorId)
+        {
+            tried.Add($"{Describe(EncoderKind.IntelVpl)}: not an Intel GPU");
+            return null;
+        }
+        try
+        {
+            var input = options.VplImport ? VplInput.Import : VplInput.CopyToEncoderSurface;
+            return VplEncoder.Start(device, context, adapterIndex, settings, input);
+        }
+        catch (DllNotFoundException)
+        {
+            tried.Add($"{Describe(EncoderKind.IntelVpl)}: libvpl.dll is missing next to Sheron");
+        }
+        catch (Exception error)
+        {
+            tried.Add($"{Describe(EncoderKind.IntelVpl)}: {Describe(error)}");
+        }
+        return null;
+    }
+
     public static string Describe(EncoderKind kind) => kind switch
     {
+        EncoderKind.IntelVpl => "oneVPL, frames on the GPU",
         EncoderKind.HardwareGpu => "hardware, GPU input",
         EncoderKind.HardwareMemory => "hardware, memory input",
         _ => "software",

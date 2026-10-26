@@ -59,7 +59,7 @@ internal sealed class DesktopDuplicator : IDisposable
     private OutduplMoveRect[] _moveRects = [];
     private RawRect[] _dirtyRects = [];
 
-    private DesktopDuplicator(IDXGIAdapter1 adapter, IDXGIOutput output, ID3D11Device device,
+    private DesktopDuplicator(IDXGIAdapter1 adapter, uint adapterIndex, IDXGIOutput output, ID3D11Device device,
         ID3D11DeviceContext context, IDXGIOutputDuplication duplication)
     {
         _adapter = adapter;
@@ -70,6 +70,7 @@ internal sealed class DesktopDuplicator : IDisposable
 
         var adapterDescription = adapter.Description1;
         AdapterName = adapterDescription.Description;
+        AdapterIndex = adapterIndex;
         AdapterVendorId = adapterDescription.VendorId;
         MonitorName = output.Description.DeviceName;
         var mode = duplication.Description.ModeDescription;
@@ -78,6 +79,9 @@ internal sealed class DesktopDuplicator : IDisposable
     }
 
     public string AdapterName { get; }
+
+    /// <summary>The adapter's index in DXGI's list; oneVPL picks its GPU by this number.</summary>
+    public uint AdapterIndex { get; }
 
     /// <summary>PCI vendor of the graphics adapter (0x8086 Intel, 0x10DE NVIDIA, 0x1002 AMD).</summary>
     public uint AdapterVendorId { get; }
@@ -106,7 +110,7 @@ internal sealed class DesktopDuplicator : IDisposable
             {
                 var place = output.Description;
                 if (place.AttachedToDesktop && place.DesktopCoordinates.Left == 0 && place.DesktopCoordinates.Top == 0)
-                    return Open(adapter, output);
+                    return Open(adapter, a, output);
                 output.Dispose();
             }
             adapter.Dispose();
@@ -115,7 +119,7 @@ internal sealed class DesktopDuplicator : IDisposable
     }
 
     /// <summary>Takes ownership of the adapter and output, and disposes them if opening fails.</summary>
-    private static DesktopDuplicator Open(IDXGIAdapter1 adapter, IDXGIOutput output)
+    private static DesktopDuplicator Open(IDXGIAdapter1 adapter, uint adapterIndex, IDXGIOutput output)
     {
         ID3D11Device? device = null;
         ID3D11DeviceContext? context = null;
@@ -132,7 +136,7 @@ internal sealed class DesktopDuplicator : IDisposable
                 multithread?.SetMultithreadProtected(true);
             using var output1 = output.QueryInterface<IDXGIOutput1>();
             var duplication = output1.DuplicateOutput(device);
-            return new DesktopDuplicator(adapter, output, device!, context!, duplication);
+            return new DesktopDuplicator(adapter, adapterIndex, output, device!, context!, duplication);
         }
         catch
         {

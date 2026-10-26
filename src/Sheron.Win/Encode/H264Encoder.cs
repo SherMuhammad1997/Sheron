@@ -12,6 +12,8 @@ namespace Sheron.Win.Encode;
 /// <summary>Encoder routes, best first (TRD › Video path). The capture loop falls back down this list.</summary>
 internal enum EncoderKind
 {
+    /// <summary>Intel GPUs: Intel oneVPL, frames staying on the GPU (Plan step 4b).</summary>
+    IntelVpl,
     /// <summary>Hardware encoder reading the NV12 GPU texture directly.</summary>
     HardwareGpu,
     /// <summary>Hardware encoder fed a CPU copy of the frame.</summary>
@@ -32,7 +34,7 @@ internal sealed record EncodedFrame(byte[] Data, bool KeyFrame, double EncoderOw
 /// worker thread owns it, so each call follows the event that asked for it before the next event is read (Intel's
 /// encoder fails with E_UNEXPECTED otherwise). <see cref="Encode"/> is called from one thread only.
 /// </summary>
-internal sealed class H264Encoder : IDisposable
+internal sealed class H264Encoder : IVideoEncoder
 {
     /// <summary>MF_LOW_LATENCY (mfapi.h); the same ID as CODECAPI_AVLowLatencyMode.</summary>
     private static readonly Guid LowLatencyAttribute = new("9c27891a-ed7a-40e1-88e8-b22727a024ee");

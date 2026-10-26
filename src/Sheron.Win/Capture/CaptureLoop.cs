@@ -44,7 +44,7 @@ internal sealed class CaptureLoop : IDisposable
 
     // Used by the capture thread only.
     private Nv12Converter? _converter;
-    private H264Encoder? _encoder;
+    private IVideoEncoder? _encoder;
     /// <summary>Which of <see cref="_kinds"/> to try next; moves on when an encoder fails.</summary>
     private int _kindIndex;
     private readonly List<string> _encoderFailures = [];
@@ -192,7 +192,7 @@ internal sealed class CaptureLoop : IDisposable
             try
             {
                 _encoder = EncoderFactory.Create(duplicator.Device, duplicator.Context, settings, kind,
-                    duplicator.AdapterVendorId, out var failures);
+                    duplicator.AdapterVendorId, duplicator.AdapterIndex, out var failures);
                 _encoderFailures.AddRange(failures);
                 if (_encoder is null) continue;
                 _converter = new Nv12Converter(duplicator.Device, duplicator.Context, duplicator.Width, duplicator.Height,

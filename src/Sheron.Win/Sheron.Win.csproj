@@ -29,4 +29,9 @@
     <PackageReference Include="Vortice.MediaFoundation" Version="3.8.3" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Intel oneVPL dispatcher, MIT (TRD › Third-party components; third_party/libvpl/README.md). -->
+    <None Include="..\..\third_party\libvpl\libvpl.dll" Link="libvpl.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

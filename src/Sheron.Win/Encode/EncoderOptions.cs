@@ -20,6 +20,8 @@ namespace Sheron.Win.Encode;
 /// <param name="AlignedInput">Memory input: allocate the frame buffer with the alignment the encoder asks for.</param>
 /// <param name="QualityVsSpeed">ICodecAPI AVEncCommonQualityVsSpeed, 0 (fastest) to 100 (best quality); -1 leaves it unset.</param>
 /// <param name="SampleDuration">Give each input sample its duration (one frame at the set frame rate).</param>
+/// <param name="VplImport">Intel oneVPL route: hand our texture to the encoder (ImportFrameSurface) instead of copying it
+/// into one of the encoder's surfaces.</param>
 internal sealed record EncoderOptions(
     bool OfferedTypes = false,
     bool ColourAttributes = true,
@@ -34,7 +36,8 @@ internal sealed record EncoderOptions(
     bool VorticeProcessOutput = false,
     bool AlignedInput = false,
     int QualityVsSpeed = 0,
-    bool SampleDuration = true)
+    bool SampleDuration = true,
+    bool VplImport = false)
 {
     /// <summary>eAVScenarioInfo_DisplayRemoting (codecapi.h).</summary>
     public const uint DisplayRemoting = 1;
