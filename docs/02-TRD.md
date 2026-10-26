@@ -70,6 +70,77 @@ Loop test window (developer only, Plan step 5): `Sheron.Win.exe --loop-test` run
 
 Measured 26 Oct on Sher's laptop (Intel Graphics, 1920 × 1200 at 60 Hz, oneVPL encoder, Microsoft decoder on the GPU, window composed by Windows, picture shown at 936 × 585): capture → screen 16.2 ms average over 5 s, 32.7 ms longest (a frame that just misses a screen refresh waits one more). Parts: encode 7.4, decode 0.4, draw 0.3, present 0.2, wait for the screen 7.8 ms. 60 fps captured and shown, 0 untimed; Sheron CPU 1.2 % for capture, encode, decode and drawing together. Gate 1 (≤ 25 ms) passed. Before the frame-latency fix (troubleshooting, 26 Oct) the same loop took 49 ms.
 
+## Packets (Plan step 6)
+
+Sheron's own packet format, written for this project. Every packet on the wire is at most 1,200 bytes; 32 of them are kept for encryption (Plan step 7), so a plain packet is at most **1,168 bytes**. Numbers are little-endian. The first byte says the kind.
+
+| Kind | Byte 0 | Use |
+| --- | --- | --- |
+| Video | 1 | One piece (shard) of one encoded frame, data or repair; lost ones are not sent again |
+| Reliable | 2 | Input and control messages, delivered once and in order |
+| Ack | 3 | Says which reliable messages arrived |
+
+**Video packet**: 16-byte header, then the shard.
+
+| Bytes | Field |
+| --- | --- |
+| 0 | Kind = 1 |
+| 1 | Flags: bit 0 keyframe, bit 1 repair shard |
+| 2–5 | Frame number (counts up from 0, wraps) |
+| 6–9 | Frame length in bytes |
+| 10 | Block index |
+| 11 | Block count |
+| 12 | Shard index in the block: data shards first, then repair shards |
+| 13 | Data shards in this block (k) |
+| 14 | Repair shards in this block (m) |
+| 15 | 0 (kept) |
+| 16– | Shard bytes; every shard of a frame has the same size (the last data shard is padded with zeros) |
+
+A frame is cut into the fewest shards of at most 1,152 bytes, all the same size; the shards are dealt into the fewest blocks of at most 32 data shards, as evenly as possible (the first blocks take one more when they do not divide evenly). Each block gets its own repair shards.
+
+| Item | Rule |
+| --- | --- |
+| Repair (FEC) | Reed–Solomon over GF(2⁸) (polynomial x⁸ + x⁴ + x³ + x² + 1), systematic, with a Cauchy matrix for the repair rows: any k of a block's k + m shards rebuild it. Written from the mathematics in our own code |
+| How many repair shards | The fewest m for which a block of k + m shards, each lost with the link's loss rate, loses more than m with a chance of at most 0.1 %. The loss rate comes from the viewer's reports (Plan step 10); until then, and never below, 1 % is assumed. At 5 % loss a 15-shard frame gets 5 repair shards |
+| Receiver | Collects shards per frame; a block is rebuilt as soon as any k of its shards are in; a frame is handed on when all its blocks are. A frame newer than the last one handed on is handed on at once; older ones are dropped. Frames skipped this way are counted as lost, so the viewer can ask for a keyframe (Plan step 10). At most 64 unfinished frames are kept |
+| Bad packets | Wrong sizes or numbers that do not fit the frame are ignored, never an error |
+
+**Reliable messages** (input, and later control messages): each message gets the next sequence number; a message longer than one packet is sent as several fragments, each with its own number.
+
+| Reliable packet bytes | Field |
+| --- | --- |
+| 0 | Kind = 2 |
+| 1 | Number of entries (1–255) |
+| then per entry: 0–3 | Sequence number |
+| 4 | Flags: bit 0 last fragment of its message |
+| 5–6 | Length |
+| 7– | Bytes |
+
+| Ack packet bytes | Field |
+| --- | --- |
+| 0 | Kind = 3 |
+| 1–4 | Next sequence number expected: everything before it has arrived |
+| 5–12 | 64 bits: bit i set means sequence number (next + 1 + i) has arrived too |
+
+| Item | Rule |
+| --- | --- |
+| Sending | New messages go out at the next send (input goes ahead of video, Plan step 9). At most 1,024 numbers are in flight |
+| Ack | The receiver answers every reliable packet with an ack at once |
+| Resend | A fragment is sent again when an ack shows later numbers arrived but not it and its own ack is overdue (a round trip and a quarter since it went, so a packet that is only late, overtaken by a later one, is not resent), or when no ack covers it within the resend time: smoothed round trip + 4 × its variation, at least 30 ms, at most 2 s, 250 ms before the first measurement, doubling with each resend of the same fragment. Round trips are measured only on fragments sent once |
+| Receiving | Fragments are put back in order; duplicates are dropped; a message is handed on when its last fragment is in |
+
+**Bad-network simulator** (`Sheron.Sim`): a one-way link on a virtual clock, so tests run in milliseconds. Settings: delay, jitter (each packet's delay varies evenly by up to ± the jitter, so packets can arrive out of order), loss rate, and UDP blocked (everything dropped). It refuses packets over 1,200 bytes. Seeded, so a test gives the same result every run.
+
+Plan step 6 check: frames and input messages sent through the simulator at 5 % loss (each way) arrive whole: at least 99 % of video frames rebuilt byte for byte, and every input message delivered once and in order.
+
+Measured 26 Oct in the cloud session (tests `BadNetworkTests`):
+
+| Test | Result |
+| --- | --- |
+| Video, 1 minute at 60 fps (keyframe of 150–200 kB every 300 frames, 5–35 kB between), 5 % loss, 20 ms ± 5 ms | 3,599 of 3,600 frames rebuilt byte for byte (99.97 %), 0 wrong; 14,834 data shards rebuilt from repair shards; 131 % of the video's bytes on the wire at this loss rate |
+| Input, 5,000 messages, one every millisecond (every 50th 3 kB), 5 % loss each way, 30 ms ± 10 ms each way | All 5,000 once and in order; 932 resends; measured round trip 58 ms; delay median 94 ms, 99 % 178 ms, longest 207 ms. At one message a millisecond nearly every message waits behind a lost one, about a round trip and a half |
+| Time per frame (Release build, both sides at 5 % loss) | 16.7 kB frame: 0.09 ms to make the packets, 0.09 ms to rebuild. 200 kB keyframe: 0.71 ms and 0.74 ms. Repair maths 32 bytes per step with AVX2 (16 with SSSE3) |
+
 ## Automatic quality
 
 | Rule | Detail |

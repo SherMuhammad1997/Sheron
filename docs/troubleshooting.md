@@ -14,6 +14,18 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-10-26 — Keyframe repair shards took 8.5 ms  (Plan step 6)
+Symptom:     `Packets_for_a_frame_take_under_a_millisecond`: a 200 kB keyframe took 8.5 ms to packetize and rebuild at 5 % loss (Debug build), over the TRD's under-1-ms packet budget; a 16.7 kB frame took 0.48 ms.
+Root cause:  GF(2⁸) multiply-add looked up one byte at a time in a 256-byte table, and every shard was copied twice (into its own array, then into its packet).
+Exact fix:   `Galois.MultiplyAdd` does 32 bytes per step with AVX2 (16 with SSSE3): c × x = c × (low 4 bits) XOR c × (high 4 bits), each a 16-entry table looked up with one byte shuffle; other processors keep the byte table. Shards are made right inside their packets (`ReedSolomon.Encode` takes `Memory<byte>`). Release build now: keyframe 0.71 ms to send, 0.74 ms to rebuild; 16.7 kB frame 0.09 ms each. A test checks the fast path against plain multiplying at every length from 0 to 100.
+Files:       `src/Sheron.Core/Net/Galois.cs`, `src/Sheron.Core/Net/ReedSolomon.cs`, `src/Sheron.Core/Net/VideoPacketizer.cs`, `tests/Sheron.Tests/Net/ReedSolomonTests.cs`
+
+### 2026-10-26 — Reliable channel resent almost every fragment  (Plan step 6)
+Symptom:     `Input_messages_all_arrive_in_order_at_5_percent_loss`: 4,669 resends and 4,118 duplicates for 5,000 messages, at 5 % loss with ± 10 ms jitter.
+Root cause:  A fragment was resent a quarter of a round trip after it went whenever an ack showed a later number had arrived. With jitter, later packets often overtake earlier ones, so fragments that were only late were taken as lost.
+Exact fix:   A gap the ack shows counts as a loss only once the fragment's own ack is overdue: a round trip and a quarter after it went (the ordinary resend time still applies too). Now 932 resends; still every message once and in order.
+Files:       `src/Sheron.Core/Net/ReliableSender.cs`, `tests/Sheron.Tests/Net/ReliableChannelTests.cs`, `docs/02-TRD.md`
+
 ### 2026-10-26 — Loop test: capture to screen about 49 ms, draw about 16 ms  (Plan step 5)
 Symptom:     `--loop-test` on Sher's PC (Intel Graphics, 60 Hz, window composed by Windows): capture → screen 48.7 ms average (max 49.5), red. Parts: encode 9.1, decode 7.5, draw 16.3 ms; 60 fps captured and shown. After the first fix (no wait on the swap chain's "ready" object, 3 buffers, device frame latency 1): the same, 49.1 ms with draw 16.2 and decode 9.0 ms.
 Root cause:  A frame latency of 1, first on the swap chain (its "ready" object, waited on before each frame), then on the device (IDXGIDevice1 maximum frame latency). Windows counts a frame as queued until it is on screen, so with 1 allowed each frame waited until the frame before it reached the screen: a whole refresh in "draw", and frames arriving meanwhile queued behind it (the 7.5–9 ms "decode").

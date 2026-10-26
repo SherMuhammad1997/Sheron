@@ -1,4 +1,5 @@
 using Sheron.Core;
 
-// The bad-network simulator (delay, jitter, loss, UDP blocked) comes in Plan step 6.
+// The simulated link (SimulatedLink, TRD › Packets) runs on a virtual clock inside the tests. Running it by hand
+// between two PCs comes with Plan step 10.
 Console.WriteLine($"{AppInfo.Name} network simulator {AppInfo.Version}");
