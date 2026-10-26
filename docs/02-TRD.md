@@ -162,6 +162,34 @@ Measured 26 Oct in the cloud session (tests `BadNetworkTests`):
 | Ctrl+Alt+Del | `SendSAS` from the service; the installer sets the Windows policy that allows a software Secure Attention Sequence |
 | Pointer | Remote PC sends the shape when it changes, then positions; the viewer draws it |
 
+## Connect by IP (Plan step 8, developer mode)
+
+Before the server exists (Plan steps 11–14), two PCs on the same network connect by IP address. This is a developer mode: no ID or password yet (Plan steps 11 and 16).
+
+| Item | Rule |
+| --- | --- |
+| Remote PC | `Sheron.Win.exe --host [--port 47920]` opens a window that says the screen can be viewed, shows this PC's IP addresses and key fingerprint, and who is viewing. Sharing lasts only while that window is open; there is no hidden mode |
+| Viewer | `Sheron.Win.exe --view <IP>[:port]` opens a window with the remote screen and its figures |
+| Device keys | Made fresh each run until Plan step 16 stores them with DPAPI; both windows show both fingerprints so they can be compared by eye |
+| Socket | One UDP socket per side; receive and send buffers of 4 MB, so a keyframe's packets fit while they are read. A "connection reset" from Windows (an ICMP reply to an earlier packet) is ignored |
+| Handshake | The viewer sends Hello every 500 ms until a Welcome comes, then Finish every 500 ms until the first sealed packet comes. The host answers a repeated Hello with the same Welcome. One viewer at a time: a new finished handshake replaces the old session |
+| Capture | The remote PC starts capturing and encoding when a viewer's handshake finishes, so the first frame the viewer gets is a keyframe; it stops when the viewer goes |
+| Keep-alive | Each side sends a reliable Ping every second, which also measures the round trip both ways. No packet for 5 s: the session is over |
+| Pointer | Sent as reliable messages: the shape when it changes, the position when it moves (the position is ordered too for now; Plan step 9 decides) |
+
+**Control messages** go over the reliable channel. Byte 0 is the type.
+
+| Type | Byte 0 | Then |
+| --- | --- | --- |
+| Video format | 1 | Width, height (4 bytes each): sent before the first frame and whenever the size changes |
+| Pointer shape | 2 | Kind (1 byte: 1 monochrome, 2 colour, 4 masked colour), width, height, pitch, hot spot X, hot spot Y (2 bytes each), the pixels |
+| Pointer position | 3 | Visible (1 byte), X, Y (4 bytes each, may be negative) |
+| Ping | 4 | Nothing |
+
+The viewer holds frames that come before the video format (at most 60) and decodes them once it is known.
+
+Plan step 8 check: PC 2's screen shows on PC 1 at 60 fps.
+
 ## Network
 
 | Item | Detail |
@@ -182,6 +210,7 @@ Measured 26 Oct in the cloud session (tests `BadNetworkTests`):
 | TCP 443 | Server | Signalling (TLS) and the TCP relay fallback |
 | UDP 443 | Server | Address check and UDP relay |
 | UDP, chosen by Windows | Both PCs | Direct link |
+| UDP 47920 | Remote PC | Developer connect by IP on the same network (Plan step 8); `--port` changes it |
 
 ## Security
 

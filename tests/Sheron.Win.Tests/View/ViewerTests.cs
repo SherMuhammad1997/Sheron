@@ -29,7 +29,7 @@ public class ViewerTests
     public void Renderer_draws_a_decoded_frame_and_the_pointer() => OnMtaThread(() =>
     {
         var (frames, width, height) = EncodeScreen(1);
-        var (device, context) = LoopViewer.CreateDevice();
+        var (device, context) = VideoViewer.CreateDevice();
         using (device)
         using (context)
         using (var decoder = H264Decoder.Create(device, context, DecoderKind.Software, width, height))
@@ -53,7 +53,7 @@ public class ViewerTests
     private static void AssertDecodes(DecoderKind kind)
     {
         var (frames, width, height) = EncodeScreen(3);
-        var (device, context) = LoopViewer.CreateDevice();
+        var (device, context) = VideoViewer.CreateDevice();
         using (device)
         using (context)
         using (var decoder = H264Decoder.Create(device, context, kind, width, height))

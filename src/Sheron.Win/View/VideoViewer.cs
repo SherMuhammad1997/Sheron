@@ -10,7 +10,7 @@ using Vortice.DXGI;
 
 namespace Sheron.Win.View;
 
-internal sealed record LoopViewerSnapshot(
+internal sealed record VideoViewerSnapshot(
     string Status,
     string Adapter,
     string Decoder,
@@ -22,10 +22,12 @@ internal sealed record LoopViewerSnapshot(
     int HeldBack);
 
 /// <summary>
-/// The viewer half of the loop test (Plan step 5): takes the capture loop's encoded frames and pointer changes,
-/// decodes and draws them in one window on its own thread and device, and times capture to display (TRD › Viewer).
+/// The viewer (TRD › Viewer): takes encoded frames and pointer changes, decodes and draws them in one window on its
+/// own thread and device, and times them to the screen. They come from the capture loop on the same PC (loop test,
+/// Plan step 5) or from the link (Plan step 8); <see cref="OnVideo"/> and <see cref="OnPointer"/> may be called from
+/// any thread.
 /// </summary>
-internal sealed class LoopViewer : ICaptureSink, IDisposable
+internal sealed class VideoViewer : ICaptureSink, IDisposable
 {
     private static readonly FeatureLevel[] FeatureLevels =
         [FeatureLevel.Level_11_1, FeatureLevel.Level_11_0, FeatureLevel.Level_10_1, FeatureLevel.Level_10_0];
@@ -74,7 +76,7 @@ internal sealed class LoopViewer : ICaptureSink, IDisposable
 
     /// <param name="window">The child window the video goes into; <paramref name="width"/> × <paramref name="height"/> its size in pixels.</param>
     /// <param name="allowHardwareDecoder">False uses the software decoder only (<c>--software-decoder</c>).</param>
-    public LoopViewer(IntPtr window, int width, int height, bool allowHardwareDecoder = true)
+    public VideoViewer(IntPtr window, int width, int height, bool allowHardwareDecoder = true)
     {
         _window = window;
         _windowWidth = width;
@@ -97,20 +99,22 @@ internal sealed class LoopViewer : ICaptureSink, IDisposable
         Post(Wake.Instance);
     }
 
-    public LoopViewerSnapshot Snapshot()
+    public VideoViewerSnapshot Snapshot()
     {
         var now = _clock.Elapsed;
         lock (_lock)
         {
-            return new LoopViewerSnapshot(_status, _adapter, _decoderName, _videoWidth, _videoHeight, _picture,
+            return new VideoViewerSnapshot(_status, _adapter, _decoderName, _videoWidth, _videoHeight, _picture,
                 _latency.Snapshot(now), _screen, _heldBack);
         }
     }
 
-    void ICaptureSink.OnVideo(EncodedFrame frame, int width, int height, long capturedAt, long encodedAt) =>
+    /// <param name="capturedAt">Where the timer starts (<c>Stopwatch</c> timestamp): capture on this PC, or arrival
+    /// from the link.</param>
+    public void OnVideo(EncodedFrame frame, int width, int height, long capturedAt, long encodedAt) =>
         Post(new VideoItem(frame, width, height, capturedAt, encodedAt));
 
-    void ICaptureSink.OnPointer(PointerPosition? position, PointerShape? shape) => Post(new PointerItem(position, shape));
+    public void OnPointer(PointerPosition? position, PointerShape? shape) => Post(new PointerItem(position, shape));
 
     private void Post(object item)
     {
