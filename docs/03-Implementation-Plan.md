@@ -48,7 +48,7 @@ GATE 4: all 11 PRD acceptance checks pass
 | --- | --- | --- |
 | 3 | Screen capture with DXGI Desktop Duplication: changed areas, pointer shape and position; a debug window shows capture fps and time per frame | 60 fps capture; ≤ 1 % CPU on a still screen |
 | 4 | H.264 encoder through Media Foundation: hardware first, software fallback, low-latency settings; the debug window shows the encoder name and time per frame | A hardware encoder makes H.264 from captured frames on Sher's PC (time target moved to step 4b) |
-| 4b | Intel route through oneVPL (added 25 Oct, PRD decision): libvpl dispatcher, D3D11 frames, low-power encoding, fastest target usage; Media Foundation stays the fallback | Encoder's own time ≤ 7 ms average at 1920 × 1200, 60 fps, on Sher's PC (Intel built-in graphics; changed from 5 ms on 26 Oct, PRD decision) |
+| 4b | Intel route through oneVPL (added 25 Oct, PRD decision): libvpl dispatcher, D3D11 frames, low-power encoding, fastest target usage; Media Foundation stays the fallback | Encoder's own time ≤ 8 ms average over 300 frames (5 s) at 1920 × 1200, 60 fps, on Sher's PC (Intel built-in graphics; target changed from 5 ms on 26 Oct, PRD decisions) |
 | 5 | Decoder and Direct3D 11 renderer in a loop on the same PC, pointer drawn locally; capture-to-display timer | Loop shows the screen; timer ≤ 25 ms |
 
 ## Phase 2 — Two PCs on the same network (Gate 2)

@@ -80,6 +80,7 @@ File transfer, clipboard sync, chat, sound, session recording, more than one mon
 | 25 Oct | Version 1 shows the main monitor only; no file transfer or clipboard |
 | 25 Oct | Encoder target stays ≤ 5 ms per frame. Intel GPUs get their own route through Intel oneVPL (Plan step 4b), because Intel's Media Foundation encoder cannot go below about 6.5 ms at 1920 × 1200 |
 | 26 Oct | Intel oneVPL measured the same floor (about 6 ms at 1920 × 1200 on the Core 7 240H: the chip's own encode time), so the encoder target is ≤ 7 ms average on Intel built-in graphics and stays ≤ 5 ms on NVIDIA and AMD. oneVPL is the default route on Intel (option A) |
+| 26 Oct | The average swings by about 1 ms between runs (6.7 and 7.6 ms; floor 6 ms), so the Intel target is ≤ 8 ms average, measured over 5 s (300 frames) (option A) |
 
 ## Decisions still open — ask Sher
 
