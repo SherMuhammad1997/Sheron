@@ -14,6 +14,12 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-10-26 — Timing test failed while other tests ran  (Plan step 7)
+Symptom:     `Sealing_and_opening_a_frame_takes_well_under_a_millisecond` failed with 1.391 ms per frame; the same work measured alone took 0.13 ms (2.3 µs to seal, 4.1 µs to open a packet).
+Root cause:  xUnit runs test classes side by side; the timing test shared the processor with the 5 % loss simulations.
+Exact fix:   Every test that times something joins the `Timing` collection (`DisableParallelization = true`), so it runs alone after the others. Now 0.074 ms per frame in the Debug test run.
+Files:       `tests/Sheron.Tests/Timing.cs`, `tests/Sheron.Tests/Security/SealingSpeedTests.cs`, `tests/Sheron.Tests/Net/BadNetworkTests.cs`
+
 ### 2026-10-26 — Keyframe repair shards took 8.5 ms  (Plan step 6)
 Symptom:     `Packets_for_a_frame_take_under_a_millisecond`: a 200 kB keyframe took 8.5 ms to packetize and rebuild at 5 % loss (Debug build), over the TRD's under-1-ms packet budget; a 16.7 kB frame took 0.48 ms.
 Root cause:  GF(2⁸) multiply-add looked up one byte at a time in a 256-byte table, and every shard was copied twice (into its own array, then into its packet).

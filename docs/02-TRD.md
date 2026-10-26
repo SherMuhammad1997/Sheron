@@ -200,6 +200,38 @@ Measured 26 Oct in the cloud session (tests `BadNetworkTests`):
 | Consent | Without a fixed password the person at the remote PC must Accept. The banner is always shown. There is no hidden or silent mode |
 | Logs | Never log passwords, keys or screen content |
 
+### Session handshake and sealed packets (Plan step 7)
+
+Built only from standard pieces in .NET 8 (`ECDsa`, `ECDiffieHellman`, `HKDF`, `AesGcm`, SHA-256), put together for Sheron. The viewer starts; the remote PC (host) answers. Public keys are sent as the raw 64-byte point (X then Y). Signatures are ECDSA P-256 with SHA-256, 64 bytes (r then s).
+
+| Message | Byte 0 | Then |
+| --- | --- | --- |
+| Hello (viewer → host) | 0x20 | Version 1 (1 byte); viewer's device public key (64); viewer's new session public key (64); 32 random bytes |
+| Welcome (host → viewer) | 0x21 | Version 1; host's device public key (64); host's new session public key (64); 32 random bytes; host's signature (64) |
+| Finish (viewer → host) | 0x22 | Version 1; viewer's signature (64) |
+
+| Item | Rule |
+| --- | --- |
+| Host signs | "Sheron 1 host" followed by SHA-256 of (Hello, then Welcome up to the signature) |
+| Viewer signs | "Sheron 1 viewer" followed by SHA-256 of (Hello, then the whole Welcome) |
+| Session keys | ECDH of the two session keys; HKDF-SHA256 with the SHA-256 of (Hello, whole Welcome) as salt and "Sheron 1 session keys" as info gives 64 bytes: the first 32 are the viewer → host AES-256-GCM key, the last 32 the host → viewer key. Session private keys live only in memory and are thrown away after the handshake |
+| Checks | Each side refuses a message with the wrong version or length, a public key that is not a point on P-256, or a signature that does not check. The host only accepts sealed packets after a good Finish |
+| Fingerprint | SHA-256 of a device public key; shown as 8 groups of 4 hex digits (its first 16 bytes) |
+| Key pinning | The viewer keeps each remote ID's fingerprint (`%AppData%\Sheron\known-keys.json`, Plan step 15). First connect: remembered. Same: go on. Different: the session stops with a warning, and the new key is only remembered if the person says so |
+
+**Sealed packet** (every packet after the handshake): 25 of the 32 bytes kept for encryption.
+
+| Bytes | Field |
+| --- | --- |
+| 0 | Kind = 0x10 |
+| 1–8 | Packet counter of this direction: 0, 1, 2, … |
+| 9– | The plain packet (video, reliable or ack), encrypted with AES-256-GCM |
+| last 16 | GCM tag |
+
+The GCM nonce is 4 zero bytes then the 8-byte counter; bytes 0–8 are authenticated too. Each direction has its own key, so a nonce is never used twice with one key. The receiver drops a packet whose tag does not check (any changed byte), and keeps a replay window: the highest counter seen and which of the 2,048 before it have come; a counter seen before, or older than the window, is dropped (checked before decrypting, marked only after the tag checks). 2,048 packets are about 2 s of video at 8 Mbit/s, far more than any jitter Sheron is built for.
+
+Measured 26 Oct in the cloud session (Release build): sealing a 1,168-byte packet 2.3 µs, opening it 4.1 µs, so about 0.13 ms for a typical frame's 20 packets (encrypt budget: under 1 ms). A whole handshake took 11.6 ms the first time, start-up of the crypto included. Plan step 7 tests (`HandshakeTests`): a change to any byte of a sealed packet, or of the Welcome, is refused; a replayed packet is refused; a host key that differs from the one remembered for that ID gives `Changed`.
+
 ## Unattended access (Windows service)
 
 | Item | Detail |
@@ -241,6 +273,7 @@ Everything else uses .NET 8 built-ins (`SslStream`, `AesGcm`, `ECDiffieHellman`,
 | Settings | `%ProgramData%\Sheron\settings.json` (no secrets) |
 | Secrets | `%ProgramData%\Sheron\secrets.bin` (DPAPI): device private key, fixed-password hash |
 | Recent list | `%AppData%\Sheron\recent.json` (per Windows user) |
+| Known keys | `%AppData%\Sheron\known-keys.json`: remote ID → device key fingerprint (key pinning; public data, no secrets) |
 | Server | `/opt/sheron-server`, systemd unit `sheron-server`, logs to journald |
 
 ## Server

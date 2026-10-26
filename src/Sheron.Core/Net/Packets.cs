@@ -1,11 +1,19 @@
 namespace Sheron.Core.Net;
 
-/// <summary>The first byte of every plain packet (TRD › Packets).</summary>
+/// <summary>The first byte of every packet (TRD › Packets, TRD › Security).</summary>
 public enum PacketKind : byte
 {
     Video = 1,
     Reliable = 2,
     Ack = 3,
+
+    /// <summary>An encrypted packet holding one of the kinds above (TRD › Security).</summary>
+    Sealed = 0x10,
+
+    /// <summary>Session handshake (TRD › Security).</summary>
+    Hello = 0x20,
+    Welcome = 0x21,
+    Finish = 0x22,
 }
 
 public static class PacketLimits

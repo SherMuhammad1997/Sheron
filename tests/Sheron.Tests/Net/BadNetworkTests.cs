@@ -9,6 +9,7 @@ namespace Sheron.Tests.Net;
 /// Plan step 6 "Done when": video frames and input messages go through the bad-network simulator at 5 % loss each
 /// way (TRD › Packets). Figures go to the test output (<c>dotnet test --logger "console;verbosity=detailed"</c>).
 /// </summary>
+[Collection(Timing.Name)]
 public class BadNetworkTests(ITestOutputHelper output)
 {
     private static readonly TimeSpan Tick = TimeSpan.FromMilliseconds(1);
