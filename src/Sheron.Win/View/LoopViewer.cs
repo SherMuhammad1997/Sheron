@@ -33,7 +33,6 @@ internal sealed class LoopViewer : ICaptureSink, IDisposable
     /// <summary>How long one wait for work lasts; shorter while presents wait to be seen on screen.</summary>
     private const int IdleWaitMs = 50;
     private const int ScreenPollMs = 2;
-    private const int ReadyWaitMs = 50;
 
     private readonly IntPtr _window;
     private readonly DecoderKind[] _kinds;
@@ -276,7 +275,6 @@ internal sealed class LoopViewer : ICaptureSink, IDisposable
     private void Show(bool newFrame)
     {
         if (_renderer is null || _decoder?.Frame is not { } texture || _frame is not { } frame) return;
-        _renderer.WaitUntilReady(ReadyWaitMs);
         _renderer.Draw(texture, _decoder.Width, _decoder.Height, _pointerImage, _pointer);
         uint count = _renderer.Present();
         if (newFrame)
@@ -303,9 +301,9 @@ internal sealed class LoopViewer : ICaptureSink, IDisposable
 
     private static string Describe(FramePresentationMode? mode) => mode switch
     {
-        FramePresentationMode.Composed => "composed by Windows (desktop window manager)",
-        FramePresentationMode.Overlay => "overlay plane (straight to the screen)",
-        FramePresentationMode.None => "straight to the screen (independent flip)",
+        FramePresentationMode.Composed => "composed by Windows (DWM)",
+        FramePresentationMode.Overlay => "overlay plane",
+        FramePresentationMode.None => "direct (independent flip)",
         FramePresentationMode.CompositionFailure => "composition failed",
         _ => "not reported by Windows",
     };

@@ -14,6 +14,12 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-10-26 — Loop test: capture to screen 48.7 ms, draw 16.3 ms  (Plan step 5)
+Symptom:     First run of `--loop-test` on Sher's PC (Intel Graphics, 60 Hz, window composed by Windows): capture → screen 48.7 ms average (max 49.5), red. Parts: encode 9.1, decode 7.5, draw 16.3 ms; 60 fps captured and shown.
+Root cause:  Before drawing each frame the viewer waited on the swap chain's frame-latency "ready" object (maximum frame latency 1). With one frame allowed, it is signalled only when Windows takes the previous frame at its next composition, so every frame waited most of a screen refresh (the 16.3 ms "draw") and frames arriving meanwhile queued behind it (the 7.5 ms "decode"). Two buffers also meant the next frame's buffer could still be on screen.
+Exact fix:   No waiting before drawing: draw and `Present(0)` as soon as a frame is decoded; Windows shows the newest frame at its next refresh. Three buffers (one on screen, one waiting, one to draw into); the swap chain no longer has the waitable flag; the device's maximum frame latency is 1 so drawing never queues on the GPU.
+Files:       `src/Sheron.Win/View/VideoRenderer.cs`, `src/Sheron.Win/View/LoopViewer.cs`, `tests/Sheron.Win.Tests/View/ViewerTests.cs`, `docs/02-TRD.md`
+
 ### 2026-10-25 — Hardware encoder took about 16 ms per frame  (Plan step 4)
 Symptom:     Intel Quick Sync (held back 0, low latency on) showed 16.3 ms average per frame in the capture test window, almost exactly one 15.6 ms Windows timer tick plus the encode.
 Root cause:  The encoder's own short waits run on the Windows timer, which ticks every 15.6 ms by default. Windows 11 also ignores timer requests from processes whose windows are hidden, unless they opt out.

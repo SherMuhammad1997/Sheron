@@ -1,5 +1,4 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Runtime.InteropServices;
 using SharpGen.Runtime;
 using Sheron.Core.Capture;
 using Sheron.Core.Video;
@@ -22,8 +21,8 @@ internal sealed class VideoRenderer : IDisposable
         Rgba = new VideoColorRgba { R = 0x0E / 255f, G = 0x14 / 255f, B = 0x1B / 255f, A = 1f },
     };
 
-    private const int BufferCount = 2;
-    private const SwapChainFlags Flags = SwapChainFlags.FrameLatencyWaitableObject;
+    /// <summary>One on screen, one waiting for the next refresh, one to draw into: drawing never waits for the screen.</summary>
+    private const int BufferCount = 3;
 
     /// <summary>Place of IDXGISwapChainMedia::GetFrameStatisticsMedia in the COM vtable (dxgi1_3.h): right after IUnknown.</summary>
     private const int MediaStatisticsSlot = 3;
@@ -33,7 +32,6 @@ internal sealed class VideoRenderer : IDisposable
     private readonly ID3D11VideoDevice _videoDevice;
     private readonly ID3D11VideoContext _videoContext;
     private readonly IDXGISwapChain1 _swapChain;
-    private readonly IntPtr _ready;
     private readonly PointerOverlay _pointer;
     private IDXGISwapChainMedia? _media;
     private ID3D11VideoProcessorEnumerator? _enumerator;
@@ -65,16 +63,12 @@ internal sealed class VideoRenderer : IDisposable
             Scaling = Scaling.Stretch,
             SwapEffect = SwapEffect.FlipDiscard,
             AlphaMode = AlphaMode.Ignore,
-            Flags = Flags,
         });
         // Sheron handles its own window keys; DXGI must not switch to full screen on Alt+Enter.
         factory.MakeWindowAssociation(window, WindowAssociationFlags.IgnoreAll);
-        using (var swapChain2 = _swapChain.QueryInterface<IDXGISwapChain2>())
-        {
-            // At most one frame waits to be shown: the newest picture is always the next one on screen.
-            swapChain2.MaximumFrameLatency = 1;
-            _ready = swapChain2.FrameLatencyWaitableObject;
-        }
+        // At most one frame of drawing queued on the GPU. No waiting for the screen: see Present.
+        using (var dxgiDevice1 = device.QueryInterface<IDXGIDevice1>())
+            dxgiDevice1.MaximumFrameLatency = 1;
         _media = _swapChain.QueryInterfaceOrNull<IDXGISwapChainMedia>();
         _pointer = new PointerOverlay(device);
     }
@@ -94,13 +88,10 @@ internal sealed class VideoRenderer : IDisposable
         // Nothing may hold the back buffer while it is resized.
         _context.ClearState();
         _context.Flush();
-        _swapChain.ResizeBuffers(BufferCount, (uint)width, (uint)height, Format.Unknown, Flags).CheckError();
+        _swapChain.ResizeBuffers(BufferCount, (uint)width, (uint)height, Format.Unknown, SwapChainFlags.None).CheckError();
         Width = width;
         Height = height;
     }
-
-    /// <summary>Waits until the swap chain can take a frame without queueing it behind another.</summary>
-    public bool WaitUntilReady(int timeoutMs) => WaitForSingleObjectEx(_ready, (uint)timeoutMs, true) == 0;
 
     /// <summary>
     /// Draws the picture, fitted to the window, then the pointer if it is visible. <paramref name="position"/> is the
@@ -134,7 +125,11 @@ internal sealed class VideoRenderer : IDisposable
         _pointer.Draw(_context, target, pointer, Picture.Left + position.X * scale, Picture.Top + position.Y * scale, scale, Picture);
     }
 
-    /// <summary>Hands the frame to Windows, to show at the next screen refresh. Returns its present count.</summary>
+    /// <summary>
+    /// Hands the frame to Windows at once (sync interval 0), to show at the next screen refresh; if a newer frame comes
+    /// before that refresh, Windows shows the newer one. Waiting for the swap chain's "ready" signal before drawing cost
+    /// a whole refresh (troubleshooting, 26 Oct). Returns the present count.
+    /// </summary>
     public uint Present()
     {
         _swapChain.Present(0, PresentFlags.None).CheckError();
@@ -223,16 +218,8 @@ internal sealed class VideoRenderer : IDisposable
         _enumerator?.Dispose();
         _pointer.Dispose();
         _media?.Dispose();
-        CloseHandle(_ready);
         _swapChain.Dispose();
         _videoContext.Dispose();
         _videoDevice.Dispose();
     }
-
-    [DllImport("kernel32.dll")]
-    private static extern uint WaitForSingleObjectEx(IntPtr handle, uint milliseconds, [MarshalAs(UnmanagedType.Bool)] bool alertable);
-
-    [DllImport("kernel32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CloseHandle(IntPtr handle);
 }

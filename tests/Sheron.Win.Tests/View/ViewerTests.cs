@@ -39,7 +39,6 @@ public class ViewerTests
             Assert.True(decoder.Decode(frames[0].Data, frames[0].KeyFrame, TimeSpan.Zero), "the decoder gave no picture");
             var pointer = PointerImage.From(IBeam());
 
-            renderer.WaitUntilReady(100);
             renderer.Draw(decoder.Frame!, decoder.Width, decoder.Height, pointer, new PointerPosition(true, 100, 100));
             uint count = renderer.Present();
             renderer.TryReadScreen(out _, out _);

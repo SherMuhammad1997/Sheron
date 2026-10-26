@@ -23,8 +23,8 @@ internal sealed class LoopTestForm : Form
     private const double TargetMs = 25;
 
     /// <summary>Height of the figures above the video, at 96 DPI.</summary>
-    private const int HeaderHeight = 196;
-    private const int RowsPerColumn = 6;
+    private const int HeaderHeight = 252;
+    private const int RowsPerColumn = 8;
 
     private readonly bool _allowHardwareEncoder;
     private readonly bool _allowHardwareDecoder;
@@ -51,7 +51,7 @@ internal sealed class LoopTestForm : Form
         SuspendLayout();
         AutoScaleDimensions = new SizeF(96f, 96f);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(960, 690);
+        ClientSize = new Size(960, 720);
         Text = $"{AppInfo.Name} — loop test";
         BackColor = Background;
         StartPosition = FormStartPosition.CenterScreen;
@@ -135,20 +135,21 @@ internal sealed class LoopTestForm : Form
         yield return ("Pointer", c.Shape is { } shape
             ? $"{CaptureTestForm.Describe(shape)} · {(c.Pointer.Visible ? $"at {c.Pointer.X}, {c.Pointer.Y}" : "hidden")}"
             : "–", null);
-
-        // Right column: how fast.
-        var latency = v.Latency;
-        if (latency.FramesPerSecond == 0)
-            yield return ("Capture → screen", "– (move a window to make frames)", null);
-        else
-            yield return ("Capture → screen", $"avg {latency.AverageMs:0.0} ms · max {latency.MaxMs:0.0} ms · target ≤ {TargetMs:0} ms",
-                latency.AverageMs <= TargetMs ? Good : Bad);
-        yield return ("Parts (avg)", latency.FramesPerSecond == 0 ? "–"
-            : $"encode {latency.EncodeMs:0.0} · decode {latency.DecodeMs:0.0} · draw {latency.DrawMs:0.0} · screen {latency.ScreenMs:0.0} ms", null);
-        yield return ("Frames", $"captured {c.Stats.FramesPerSecond} fps · shown {latency.FramesPerSecond} fps · untimed {latency.Untimed} (last 5 s)", null);
-        yield return ("Screen", v.Screen, null);
         yield return ("Timer", c.FineTimer ? "1 ms" : "Windows default (15.6 ms)", null);
         yield return ("Sheron CPU", $"{_cpuPercent:0.0} % of this PC (last 3 s)", null);
+
+        // Right column: how fast, averages over the last 5 s.
+        var l = v.Latency;
+        bool timed = l.FramesPerSecond > 0;
+        yield return ("Capture → screen", timed ? $"avg {l.AverageMs:0.0} · max {l.MaxMs:0.0} ms" : "– (move a window)",
+            timed ? (l.AverageMs <= TargetMs ? Good : Bad) : null);
+        yield return ("Target", $"avg ≤ {TargetMs:0} ms (Gate 1)", null);
+        yield return ("Encode", timed ? $"{l.EncodeMs:0.0} ms capture → encoded" : "–", null);
+        yield return ("Decode", timed ? $"{l.DecodeMs:0.0} ms encoded → decoded" : "–", null);
+        yield return ("Draw", timed ? $"{l.DrawMs:0.0} ms decoded → presented" : "–", null);
+        yield return ("Screen wait", timed ? $"{l.ScreenMs:0.0} ms presented → shown" : "–", null);
+        yield return ("Screen", v.Screen, null);
+        yield return ("Frames /s", $"captured {c.Stats.FramesPerSecond} · shown {l.FramesPerSecond} · untimed {l.Untimed / 5}", null);
     }
 
     protected override void Dispose(bool disposing)
