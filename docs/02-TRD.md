@@ -68,6 +68,8 @@ Measured 26 Oct, Intel oneVPL 2.15 runtime (driver 32.0.101.7076, Core 7 240H, 1
 
 Loop test window (developer only, Plan step 5): `Sheron.Win.exe --loop-test` runs capture → encode → decode → draw on one PC and shows the main monitor in a window with the timer: the average and longest over the last 5 s, and its parts. Gate 1 reads the 5 s average, as step 4b did. Add `--software-encoder` or `--software-decoder` to skip a hardware route. The window also shows itself inside the picture (a mirror); a 60 fps video elsewhere on the screen gives a steady 60 frames a second to time.
 
+Measured 26 Oct on Sher's laptop (Intel Graphics, 1920 × 1200 at 60 Hz, oneVPL encoder, Microsoft decoder on the GPU, window composed by Windows, picture shown at 936 × 585): capture → screen 16.2 ms average over 5 s, 32.7 ms longest (a frame that just misses a screen refresh waits one more). Parts: encode 7.4, decode 0.4, draw 0.3, present 0.2, wait for the screen 7.8 ms. 60 fps captured and shown, 0 untimed; Sheron CPU 1.2 % for capture, encode, decode and drawing together. Gate 1 (≤ 25 ms) passed. Before the frame-latency fix (troubleshooting, 26 Oct) the same loop took 49 ms.
+
 ## Automatic quality
 
 | Rule | Detail |
