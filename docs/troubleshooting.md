@@ -14,6 +14,12 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-10-25 — Hardware encoder took about 16 ms per frame  (Plan step 4)
+Symptom:     Intel Quick Sync (held back 0, low latency on) showed 16.3 ms average per frame in the capture test window, almost exactly one 15.6 ms Windows timer tick plus the encode.
+Root cause:  The encoder's own short waits run on the Windows timer, which ticks every 15.6 ms by default. Windows 11 also ignores timer requests from processes whose windows are hidden, unless they opt out.
+Exact fix:   `TimerResolution` asks for a 1 ms timer (`timeBeginPeriod(1)`) while the capture loop runs and opts the process out of power throttling (`SetProcessInformation`, ProcessPowerThrottling: execution speed and ignore-timer-resolution off). Encode time fell to about 8 ms; the rest is the chip's own encode time (about 6 ms floor, see TRD). The test window's Timer line shows whether Windows granted 1 ms.
+Files:       `src/Sheron.Win/TimerResolution.cs`, `src/Sheron.Win/Capture/CaptureLoop.cs`, `src/Sheron.Win/CaptureTestForm.cs`, `docs/02-TRD.md`
+
 ### 2026-10-25 — Intel Quick Sync encoder: ProcessOutput fails with E_UNEXPECTED (0x8000FFFF)  (Plan step 4)
 Symptom:     The Intel® Quick Sync Video H.264 Encoder MFT accepted every setting and the first frame (events "need input", "have output"), then ProcessOutput returned E_UNEXPECTED. Same with GPU and memory input, with and without low latency, with our own output buffer, through Vortice's ProcessOutput, and with one thread doing every call. The Microsoft software encoder worked.
 Root cause:  This Intel encoder only produces output when the ICodecAPI scenario (AVScenarioInfo) is set; with display remoting it works. Found by the Windows test `Hardware_encoder_settings_check`, which tries the settings one by one.

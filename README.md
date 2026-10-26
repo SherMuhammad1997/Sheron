@@ -2,7 +2,7 @@
 
 Simple, fast remote desktop for Windows. Connect to any PC in the world with a 9-digit ID and a password, see its screen and control it.
 
-Status: Implementation Plan steps 4 and 4b (H.264 encoder, Intel oneVPL route) built; waiting for the final check on Sher's PC.
+Status: Implementation Plan steps 4 and 4b (H.264 encoder, Intel oneVPL route) done; next is step 5 (decoder and renderer).
 
 Build and test: `dotnet build Sheron.sln` and `dotnet test Sheron.sln` (.NET 8 SDK).
 
