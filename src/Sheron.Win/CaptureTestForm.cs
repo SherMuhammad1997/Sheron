@@ -1,7 +1,5 @@
-using System.Diagnostics;
 using Sheron.Core;
 using Sheron.Core.Capture;
-using Sheron.Core.Diagnostics;
 using Sheron.Win.Capture;
 
 namespace Sheron.Win;
@@ -18,13 +16,9 @@ internal sealed class CaptureTestForm : Form
     private static readonly Color Accent = Color.FromArgb(0xF2, 0xA9, 0x3B);
     private const TextFormatFlags Wrapped = TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl;
 
-    /// <summary>CPU is averaged over about 3 s: process times move in scheduler ticks, too coarse for half a second.</summary>
-    private const int CpuSamples = 6;
-
     private readonly CaptureLoop _capture;
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 500 };
-    private readonly Process _self = Process.GetCurrentProcess();
-    private readonly Queue<(long At, TimeSpan Cpu)> _cpuSamples = new();
+    private readonly CpuMeter _cpu = new();
     private readonly Font _titleFont = new("Segoe UI Semibold", 12f);
     private readonly Font _labelFont = new("Segoe UI", 10f);
     private readonly Font _valueFont = new("Consolas", 10.5f);
@@ -46,21 +40,13 @@ internal sealed class CaptureTestForm : Form
         ResumeLayout(false);
 
         _capture = new CaptureLoop(allowHardwareEncoder);
-        _cpuSamples.Enqueue((Stopwatch.GetTimestamp(), _self.TotalProcessorTime));
         _refresh.Tick += (_, _) => RefreshFigures();
         _refresh.Start();
     }
 
     private void RefreshFigures()
     {
-        _self.Refresh();
-        long at = Stopwatch.GetTimestamp();
-        var cpu = _self.TotalProcessorTime;
-        var oldest = _cpuSamples.Peek();
-        _cpuPercent = CpuUsage.Percent(cpu - oldest.Cpu, Stopwatch.GetElapsedTime(oldest.At, at), Environment.ProcessorCount);
-        _cpuSamples.Enqueue((at, cpu));
-        if (_cpuSamples.Count > CpuSamples) _cpuSamples.Dequeue();
-
+        _cpuPercent = _cpu.Read();
         _snapshot = _capture.Snapshot();
         Invalidate();
     }
@@ -125,7 +111,7 @@ internal sealed class CaptureTestForm : Form
         yield return ("Reopened", $"{s.Reopens}×");
     }
 
-    private static string Describe(PointerShape shape) => shape.Kind switch
+    internal static string Describe(PointerShape shape) => shape.Kind switch
     {
         // A monochrome shape holds two masks stacked, so the pointer is half as tall.
         PointerShapeKind.Monochrome => $"{shape.Width} × {shape.Height / 2} monochrome",
@@ -140,7 +126,7 @@ internal sealed class CaptureTestForm : Form
         {
             _refresh.Dispose();
             _capture.Dispose();
-            _self.Dispose();
+            _cpu.Dispose();
             _titleFont.Dispose();
             _labelFont.Dispose();
             _valueFont.Dispose();

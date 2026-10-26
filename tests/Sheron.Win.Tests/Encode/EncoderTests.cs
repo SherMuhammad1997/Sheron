@@ -1,6 +1,7 @@
 using Sheron.Core.Video;
 using Sheron.Win.Capture;
 using Sheron.Win.Encode;
+using static Sheron.Win.Tests.TestScreen;
 
 namespace Sheron.Win.Tests.Encode;
 
@@ -127,17 +128,6 @@ public class EncoderTests
         Assert.True(ok, text);
     }
 
-    /// <summary>Opens the main monitor and waits for its first frame, which holds the whole desktop.</summary>
-    private static DesktopDuplicator OpenWithFirstFrame()
-    {
-        var duplicator = DesktopDuplicator.OpenMainMonitor();
-        var captured = CaptureResult.Still;
-        for (int i = 0; i < 20 && captured.Status != CaptureStatus.NewFrame; i++)
-            captured = duplicator.Capture(100);
-        Assert.Equal(CaptureStatus.NewFrame, captured.Status);
-        return duplicator;
-    }
-
     /// <summary>
     /// Starts a fresh encoder and encodes the captured frame, again up to <paramref name="maxFrames"/> times until
     /// output comes back; says what happened.
@@ -175,20 +165,5 @@ public class EncoderTests
         {
             return (false, $"{encoder.Details}: {EncoderFactory.Describe(error)} [{applied}]");
         }
-    }
-
-    /// <summary>Media Foundation needs COM, which an MTA thread sets up when it starts.</summary>
-    private static void OnMtaThread(Action test)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try { test(); }
-            catch (Exception error) { failure = error; }
-        });
-        thread.SetApartmentState(ApartmentState.MTA);
-        thread.Start();
-        thread.Join();
-        if (failure is not null) throw new Xunit.Sdk.XunitException(failure.ToString());
     }
 }

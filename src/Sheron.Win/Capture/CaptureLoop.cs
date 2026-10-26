@@ -34,6 +34,7 @@ internal sealed class CaptureLoop : IDisposable
     private const int RetryMs = 250;
 
     private readonly EncoderKind[] _kinds;
+    private readonly ICaptureSink? _sink;
     private readonly TimerResolution _timer = new();
     private readonly Thread _thread;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -43,6 +44,7 @@ internal sealed class CaptureLoop : IDisposable
     private volatile bool _stopping;
 
     // Used by the capture thread only.
+    private VideoSettings? _settings;
     private Nv12Converter? _converter;
     private IVideoEncoder? _encoder;
     /// <summary>Which of <see cref="_kinds"/> to try next; moves on when an encoder fails.</summary>
@@ -65,9 +67,11 @@ internal sealed class CaptureLoop : IDisposable
     private int _heldBack;
 
     /// <param name="allowHardwareEncoder">False uses the software encoder only (<c>--software-encoder</c>).</param>
-    public CaptureLoop(bool allowHardwareEncoder = true)
+    /// <param name="sink">Also gets every encoded frame and pointer change (the loop test window, Plan step 5).</param>
+    public CaptureLoop(bool allowHardwareEncoder = true, ICaptureSink? sink = null)
     {
         _kinds = allowHardwareEncoder ? EncoderFactory.AllKinds : [EncoderKind.Software];
+        _sink = sink;
         _thread = new Thread(Run) { IsBackground = true, Name = "Sheron capture" };
         // Media Foundation needs COM; an MTA thread has it set up when it starts.
         _thread.SetApartmentState(ApartmentState.MTA);
@@ -127,7 +131,7 @@ internal sealed class CaptureLoop : IDisposable
                     continue;
                 }
                 Record(result, duplicator);
-                if (result.Status == CaptureStatus.NewFrame) EncodeLatest(duplicator);
+                if (result.Status == CaptureStatus.NewFrame) EncodeLatest(duplicator, result.CapturedAt);
             }
         }
         finally
@@ -180,12 +184,14 @@ internal sealed class CaptureLoop : IDisposable
                 _shapeChanges++;
             }
         }
+        if (result.Pointer is not null || result.Shape is not null) _sink?.OnPointer(result.Pointer, result.Shape);
     }
 
     /// <summary>Starts the best encoder route that works, from <see cref="_kindIndex"/> down the list.</summary>
     private void StartEncoder(DesktopDuplicator duplicator)
     {
         var settings = VideoSettings.ForScreen(duplicator.Width, duplicator.Height);
+        _settings = settings;
         for (; _kindIndex < _kinds.Length; _kindIndex++)
         {
             var kind = _kinds[_kindIndex];
@@ -211,17 +217,21 @@ internal sealed class CaptureLoop : IDisposable
         SetEncoder("none" + TriedFirst(), "–");
     }
 
-    private void EncodeLatest(DesktopDuplicator duplicator)
+    private void EncodeLatest(DesktopDuplicator duplicator, long capturedAt)
     {
-        if (_encoder is null || _converter is null || duplicator.Frame is not { } frame) return;
+        if (_encoder is null || _converter is null || _settings is null || duplicator.Frame is not { } frame) return;
         try
         {
             long started = Stopwatch.GetTimestamp();
             var at = _clock.Elapsed;
             var frames = _encoder.Encode(_converter.Convert(frame), at);
-            double ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            long encodedAt = Stopwatch.GetTimestamp();
+            double ms = Stopwatch.GetElapsedTime(started, encodedAt).TotalMilliseconds;
             foreach (var encoded in frames)
+            {
                 _encodeStats.AddFrame(at, ms, encoded.Data.Length, encoded.KeyFrame, encoded.EncoderOwnMs);
+                _sink?.OnVideo(encoded, _settings.Width, _settings.Height, capturedAt, encodedAt);
+            }
             lock (_lock) _heldBack = _encoder.HeldBack;
         }
         catch (Exception error)

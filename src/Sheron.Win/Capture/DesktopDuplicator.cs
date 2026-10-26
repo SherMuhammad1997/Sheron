@@ -22,13 +22,16 @@ internal enum CaptureStatus
     Lost,
 }
 
+/// <param name="CapturedAt">When Windows handed the frame over (<c>Stopwatch</c> timestamp): where the
+/// capture-to-display timer starts (TRD › Viewer).</param>
 internal sealed record CaptureResult(
     CaptureStatus Status,
     double FrameMs,
     IReadOnlyList<ScreenRect> ChangedAreas,
     PointerPosition? Pointer,
     PointerShape? Shape,
-    string? LostReason)
+    string? LostReason,
+    long CapturedAt = 0)
 {
     public static readonly CaptureResult Still = new(CaptureStatus.NoChange, 0, [], null, null, null);
 
@@ -181,7 +184,8 @@ internal sealed class DesktopDuplicator : IDisposable
             resource.Dispose();
             _duplication.ReleaseFrame();
         }
-        return new CaptureResult(status, Stopwatch.GetElapsedTime(started).TotalMilliseconds, changed, pointer, shape, null);
+        return new CaptureResult(status, Stopwatch.GetElapsedTime(started).TotalMilliseconds, changed, pointer, shape, null,
+            started);
     }
 
     /// <summary>A short reason in plain words for the capture test window.</summary>

@@ -6,10 +6,11 @@ internal static class Program
     private static void Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
-        // --capture-test opens the developer window for Plan steps 3–4 instead of the app;
-        // add --software-encoder to skip the hardware encoder.
-        Form first = args.Contains("--capture-test")
-            ? new CaptureTestForm(allowHardwareEncoder: !args.Contains("--software-encoder"))
+        // Developer windows instead of the app: --capture-test for Plan steps 3–4, --loop-test for step 5.
+        // --software-encoder and --software-decoder skip the hardware routes.
+        bool hardwareEncoder = !args.Contains("--software-encoder");
+        Form first = args.Contains("--capture-test") ? new CaptureTestForm(hardwareEncoder)
+            : args.Contains("--loop-test") ? new LoopTestForm(hardwareEncoder, !args.Contains("--software-decoder"))
             : new MainForm();
         Application.Run(first);
     }
