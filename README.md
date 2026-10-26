@@ -10,7 +10,7 @@ Capture and encoder test window (Plan steps 3–4): `dotnet run --project src/Sh
 
 Loop test window (Plan step 5): `dotnet run --project src/Sheron.Win -- --loop-test` (add `--software-encoder` or `--software-decoder` to skip a hardware route)
 
-Connect by IP on the same network (Plan step 8, developer mode): on the remote PC `dotnet run --project src/Sheron.Win -- --host` (UDP 47920; `--port N` to change), on the viewer `dotnet run --project src/Sheron.Win -- --view <remote IP>`
+Connect by IP on the same network (Plan step 8, developer mode): on the remote PC `dotnet run --project src/Sheron.Win -- --host` (UDP 47920; `--port N` to change), on the viewer `dotnet run --project src/Sheron.Win -- --view <remote IP>`. The remote PC needs no GitHub account or source: on the developer PC run `dotnet publish src/Sheron.Win -c Release -r win-x64 --self-contained false -o <folder>`, copy the folder (about 4 MB) to the remote PC, which needs the .NET 8 Desktop Runtime, and run `Sheron.Win.exe --host` there
 
 | Document | What it covers |
 | --- | --- |
