@@ -14,11 +14,11 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
-### 2026-10-26 — Loop test: capture to screen 48.7 ms, draw 16.3 ms  (Plan step 5)
-Symptom:     First run of `--loop-test` on Sher's PC (Intel Graphics, 60 Hz, window composed by Windows): capture → screen 48.7 ms average (max 49.5), red. Parts: encode 9.1, decode 7.5, draw 16.3 ms; 60 fps captured and shown.
-Root cause:  Before drawing each frame the viewer waited on the swap chain's frame-latency "ready" object (maximum frame latency 1). With one frame allowed, it is signalled only when Windows takes the previous frame at its next composition, so every frame waited most of a screen refresh (the 16.3 ms "draw") and frames arriving meanwhile queued behind it (the 7.5 ms "decode"). Two buffers also meant the next frame's buffer could still be on screen.
-Exact fix:   No waiting before drawing: draw and `Present(0)` as soon as a frame is decoded; Windows shows the newest frame at its next refresh. Three buffers (one on screen, one waiting, one to draw into); the swap chain no longer has the waitable flag; the device's maximum frame latency is 1 so drawing never queues on the GPU.
-Files:       `src/Sheron.Win/View/VideoRenderer.cs`, `src/Sheron.Win/View/LoopViewer.cs`, `tests/Sheron.Win.Tests/View/ViewerTests.cs`, `docs/02-TRD.md`
+### 2026-10-26 — Loop test: capture to screen about 49 ms, draw about 16 ms  (Plan step 5)
+Symptom:     `--loop-test` on Sher's PC (Intel Graphics, 60 Hz, window composed by Windows): capture → screen 48.7 ms average (max 49.5), red. Parts: encode 9.1, decode 7.5, draw 16.3 ms; 60 fps captured and shown. After the first fix (no wait on the swap chain's "ready" object, 3 buffers, device frame latency 1): the same, 49.1 ms with draw 16.2 and decode 9.0 ms.
+Root cause:  A frame latency of 1, first on the swap chain (its "ready" object, waited on before each frame), then on the device (IDXGIDevice1 maximum frame latency). Windows counts a frame as queued until it is on screen, so with 1 allowed each frame waited until the frame before it reached the screen: a whole refresh in "draw", and frames arriving meanwhile queued behind it (the 7.5–9 ms "decode").
+Exact fix:   No frame-latency limit of 1 anywhere: no waitable swap chain, Windows' default device latency (3). Each frame is drawn and handed over with `Present(0)` as soon as it is decoded; Windows shows the newest frame at its next refresh. Three buffers (one on screen, one waiting, one to draw into). The loop window now shows the present call's own time apart from drawing.
+Files:       `src/Sheron.Win/View/VideoRenderer.cs`, `src/Sheron.Win/View/LoopViewer.cs`, `src/Sheron.Win/LoopTestForm.cs`, `src/Sheron.Core/Video/LatencyStats.cs`, `tests/Sheron.Tests/Video/*`, `tests/Sheron.Win.Tests/View/ViewerTests.cs`, `docs/02-TRD.md`
 
 ### 2026-10-25 — Hardware encoder took about 16 ms per frame  (Plan step 4)
 Symptom:     Intel Quick Sync (held back 0, low latency on) showed 16.3 ms average per frame in the capture test window, almost exactly one 15.6 ms Windows timer tick plus the encode.

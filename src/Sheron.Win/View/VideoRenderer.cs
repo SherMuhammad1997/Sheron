@@ -66,9 +66,8 @@ internal sealed class VideoRenderer : IDisposable
         });
         // Sheron handles its own window keys; DXGI must not switch to full screen on Alt+Enter.
         factory.MakeWindowAssociation(window, WindowAssociationFlags.IgnoreAll);
-        // At most one frame of drawing queued on the GPU. No waiting for the screen: see Present.
-        using (var dxgiDevice1 = device.QueryInterface<IDXGIDevice1>())
-            dxgiDevice1.MaximumFrameLatency = 1;
+        // The device keeps Windows' default frame latency (3). Windows counts a frame as queued until it is on screen,
+        // so a latency of 1 made every Present wait a whole refresh for the frame before it (26 Oct, troubleshooting).
         _media = _swapChain.QueryInterfaceOrNull<IDXGISwapChainMedia>();
         _pointer = new PointerOverlay(device);
     }

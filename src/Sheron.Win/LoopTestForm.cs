@@ -141,12 +141,12 @@ internal sealed class LoopTestForm : Form
         // Right column: how fast, averages over the last 5 s.
         var l = v.Latency;
         bool timed = l.FramesPerSecond > 0;
-        yield return ("Capture → screen", timed ? $"avg {l.AverageMs:0.0} · max {l.MaxMs:0.0} ms" : "– (move a window)",
+        yield return ("Capture → screen", timed ? $"avg {l.AverageMs:0.0} · max {l.MaxMs:0.0} ms · goal ≤ {TargetMs:0}" : "– (move a window)",
             timed ? (l.AverageMs <= TargetMs ? Good : Bad) : null);
-        yield return ("Target", $"avg ≤ {TargetMs:0} ms (Gate 1)", null);
         yield return ("Encode", timed ? $"{l.EncodeMs:0.0} ms capture → encoded" : "–", null);
         yield return ("Decode", timed ? $"{l.DecodeMs:0.0} ms encoded → decoded" : "–", null);
-        yield return ("Draw", timed ? $"{l.DrawMs:0.0} ms decoded → presented" : "–", null);
+        yield return ("Draw", timed ? $"{l.DrawMs:0.0} ms decoded → drawn" : "–", null);
+        yield return ("Present", timed ? $"{l.PresentMs:0.0} ms handing it to Windows" : "–", null);
         yield return ("Screen wait", timed ? $"{l.ScreenMs:0.0} ms presented → shown" : "–", null);
         yield return ("Screen", v.Screen, null);
         yield return ("Frames /s", $"captured {c.Stats.FramesPerSecond} · shown {l.FramesPerSecond} · untimed {l.Untimed / 5}", null);

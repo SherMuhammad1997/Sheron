@@ -212,7 +212,7 @@ internal sealed class LoopViewer : ICaptureSink, IDisposable
                 lock (_lock) _heldBack = _decoder.HeldBack;
                 return false;
             }
-            _frame = new FrameTimes(video.CapturedAt, video.EncodedAt, Stopwatch.GetTimestamp(), 0);
+            _frame = new FrameTimes(video.CapturedAt, video.EncodedAt, Stopwatch.GetTimestamp(), 0, 0);
             lock (_lock)
             {
                 _status = "Showing";
@@ -276,10 +276,11 @@ internal sealed class LoopViewer : ICaptureSink, IDisposable
     {
         if (_renderer is null || _decoder?.Frame is not { } texture || _frame is not { } frame) return;
         _renderer.Draw(texture, _decoder.Width, _decoder.Height, _pointerImage, _pointer);
+        long drawn = Stopwatch.GetTimestamp();
         uint count = _renderer.Present();
         if (newFrame)
         {
-            frame = frame with { Presented = Stopwatch.GetTimestamp() };
+            frame = frame with { Drawn = drawn, Presented = Stopwatch.GetTimestamp() };
             _frame = frame;
         }
         _tracker.Presented(count, frame);

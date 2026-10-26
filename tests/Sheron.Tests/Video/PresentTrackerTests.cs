@@ -4,8 +4,8 @@ namespace Sheron.Tests.Video;
 
 public class PresentTrackerTests
 {
-    /// <summary>A video frame captured at <paramref name="captured"/>, each later point 1 000 ticks on.</summary>
-    private static FrameTimes Frame(long captured) => new(captured, captured + 1000, captured + 2000, captured + 3000);
+    /// <summary>A video frame captured at <paramref name="captured"/> and presented 3 000 ticks later.</summary>
+    private static FrameTimes Frame(long captured) => new(captured, captured + 1000, captured + 2000, captured + 2500, captured + 3000);
 
     [Fact]
     public void A_present_reported_at_its_own_refresh_was_shown_at_that_refresh()

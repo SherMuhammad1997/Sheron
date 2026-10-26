@@ -13,9 +13,9 @@ public class LatencyStatsTests
     public void Each_part_and_the_total_are_averaged_in_ms()
     {
         var stats = new LatencyStats(TicksPerSecond);
-        // Encode 8 ms, decode 2 ms, draw 1 ms, wait for the screen 9 ms: 20 ms in all.
-        stats.AddShown(Ms(0), new FrameTimes(0, 8_000, 10_000, 11_000, 20_000));
-        stats.AddShown(Ms(16), new FrameTimes(100_000, 108_000, 110_000, 111_000, 130_000));
+        // Encode 8 ms, decode 2 ms, draw 0.5 ms, present 0.5 ms, wait for the screen 9 ms: 20 ms in all.
+        stats.AddShown(Ms(0), new FrameTimes(0, 8_000, 10_000, 10_500, 11_000, 20_000));
+        stats.AddShown(Ms(16), new FrameTimes(100_000, 108_000, 110_000, 110_500, 111_000, 130_000));
 
         var snapshot = stats.Snapshot(Ms(20));
 
@@ -23,7 +23,8 @@ public class LatencyStatsTests
         Assert.Equal(30.0, snapshot.MaxMs);
         Assert.Equal(8.0, snapshot.EncodeMs);
         Assert.Equal(2.0, snapshot.DecodeMs);
-        Assert.Equal(1.0, snapshot.DrawMs);
+        Assert.Equal(0.5, snapshot.DrawMs);
+        Assert.Equal(0.5, snapshot.PresentMs);
         Assert.Equal(14.0, snapshot.ScreenMs);
     }
 
@@ -32,7 +33,7 @@ public class LatencyStatsTests
     {
         var stats = new LatencyStats(TicksPerSecond);
         for (int i = 0; i < 300; i++)
-            stats.AddShown(Ms(i * 1000.0 / 60), new FrameTimes(0, 1, 2, 3, 4));
+            stats.AddShown(Ms(i * 1000.0 / 60), new FrameTimes(0, 1, 2, 3, 4, 5));
 
         Assert.Equal(60, stats.Snapshot(Ms(4990)).FramesPerSecond);
     }
@@ -41,9 +42,9 @@ public class LatencyStatsTests
     public void Frames_older_than_five_seconds_are_dropped()
     {
         var stats = new LatencyStats(TicksPerSecond);
-        stats.AddShown(Ms(0), new FrameTimes(0, 0, 0, 0, 90_000));
+        stats.AddShown(Ms(0), new FrameTimes(0, 0, 0, 0, 0, 90_000));
         stats.AddUntimed(Ms(0));
-        stats.AddShown(Ms(5500), new FrameTimes(0, 0, 0, 0, 10_000));
+        stats.AddShown(Ms(5500), new FrameTimes(0, 0, 0, 0, 0, 10_000));
 
         var snapshot = stats.Snapshot(Ms(6000));
 
