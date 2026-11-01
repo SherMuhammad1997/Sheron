@@ -245,12 +245,18 @@ internal sealed class HostTestForm : DevForm
         else if (_denyButton.Contains(e.Location)) request.Deny();
     }
 
-    /// <summary>This PC's IPv4 addresses on networks that are up, for the viewer to type.</summary>
+    /// <summary>
+    /// This PC's IPv4 addresses on networks that are up, for the viewer to type. Networks with a default gateway (the
+    /// Wi-Fi or cable the other PC is on) come first; virtual ones such as VirtualBox's have none and come after.
+    /// </summary>
     private static string LocalAddresses()
     {
         var addresses = NetworkInterface.GetAllNetworkInterfaces()
             .Where(n => n.OperationalStatus == OperationalStatus.Up && n.NetworkInterfaceType != NetworkInterfaceType.Loopback)
-            .SelectMany(n => n.GetIPProperties().UnicastAddresses)
+            .Select(n => n.GetIPProperties())
+            .OrderByDescending(p => p.GatewayAddresses.Any(g =>
+                g.Address.AddressFamily == AddressFamily.InterNetwork && !g.Address.Equals(System.Net.IPAddress.Any)))
+            .SelectMany(p => p.UnicastAddresses)
             .Where(a => a.Address.AddressFamily == AddressFamily.InterNetwork)
             .Select(a => a.Address.ToString())
             .ToList();

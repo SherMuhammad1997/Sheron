@@ -14,6 +14,12 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-11-02 — Viewer stuck on "Connecting…" to 192.168.56.1  (Plan step 16)
+Symptom:     Viewing Sher's PC from the second laptop stayed on "Connecting to 192.168.56.1:47920 …", and Sher's PC never showed a request.
+Root cause:  192.168.56.1 is VirtualBox's private network on Sher's PC, which the other laptop cannot reach. The sharing window listed every address in Windows' adapter order (VirtualBox and other virtual adapters first) and the row was cut off with "…", so the Wi-Fi address (172.20.10.x on the iPhone hotspot) was hidden.
+Exact fix:   For now, maximise the sharing window (the row widens) or run `ipconfig` and use the Wi-Fi adapter's IPv4 address. In the code, the sharing window lists addresses on networks with a default gateway first (the Wi-Fi or cable another PC is on); virtual networks have none and come after. Connect by ID (Plan step 14) removes the need to type addresses.
+Files:       `src/Sheron.Win/HostTestForm.cs`
+
 ### 2026-11-02 — New Sheron.exe on the second laptop: double-click, nothing appears  (Plan step 16)
 Symptom:     Double-clicking the new build on PC 2 showed nothing at all; on Sher's PC the same build opened. The Windows event log (.NET Runtime) said: "Failure processing application bundle; possible file corruption. Arithmetic overflow while reading bundle."
 Root cause:  The copy on PC 2 was cut short: 44,201 KB instead of 70,801 KB. A one-file exe that is incomplete cannot read the bundle inside it, and closes before any window, with no message.
