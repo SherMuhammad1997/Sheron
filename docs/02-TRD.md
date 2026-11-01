@@ -238,7 +238,7 @@ Measured 1 Nov on Sher's two laptops, both on an iPhone hotspot (each packet cro
 | Key pinning | The viewer remembers the remote PC's key fingerprint on first connect and warns if it ever changes |
 | Session keys | New ECDH P-256 key per session, signed by both device keys; HKDF-SHA256 → AES-256-GCM, one key per direction; counter nonces; replay window |
 | End to end | The server only sees sealed packets and never has the session keys |
-| Server link | TLS 1.3; the server's certificate key is pinned in the app |
+| Server link | TLS 1.3, or 1.2 where Windows 10 has no 1.3; the server's certificate key is pinned in the app either way (Rendezvous protocol, below) |
 | One-time password | 8 characters from a 32-character set with no look-alikes (no 0/O, 1/I/L); new after every session |
 | Fixed password | PBKDF2-SHA256, 600,000 rounds, 16-byte salt; only the hash is stored |
 | Password check | Only inside the encrypted channel |
@@ -320,7 +320,7 @@ Everything else uses .NET 8 built-ins (`SslStream`, `AesGcm`, `ECDiffieHellman`,
 | Secrets | `%ProgramData%\Sheron\secrets.bin` (DPAPI): device private key, fixed-password hash |
 | Recent list | `%AppData%\Sheron\recent.json` (per Windows user) |
 | Known keys | `%AppData%\Sheron\known-keys.json`: remote ID → device key fingerprint (key pinning; public data, no secrets) |
-| Server | `/opt/sheron-server`, systemd unit `sheron-server`, logs to journald |
+| Server | `/opt/sheron-server`, systemd unit `sheron-server`, logs to journald; data folder (`--data`) with `server-certificate.pfx` (the TLS key, readable by the server's user only) and `registry.txt` |
 
 ## Server
 
@@ -330,6 +330,39 @@ Everything else uses .NET 8 built-ins (`SslStream`, `AesGcm`, `ECDiffieHellman`,
 | Stores | ID ↔ public key and last-seen time, in one small file. No passwords, no screen data |
 | Bandwidth | A relayed session uses about 0.3–2 Mbps; 100 Mbps carries about 50–100 relayed sessions at once. Direct links cost the server nothing |
 | Limits | Connect attempts limited per IP address and per ID |
+
+### Rendezvous protocol (Plan step 11)
+
+Sheron's own protocol between each PC and the server. The server only introduces PCs: it never sees session keys or the screen.
+
+| Item | Rule |
+| --- | --- |
+| Link | TCP, port 443 by default, inside TLS (1.3 where the PC has it; Windows 10 may only offer TLS 1.2). The app checks the server's certificate by its pinned key: SHA-256 of the certificate's public key (SubjectPublicKeyInfo), not by a certificate authority, so a self-signed certificate on a bare IP address is enough |
+| Server certificate | Made by the server on its first start (ECDSA P-256, self-signed, 10 years) and kept in its data folder; the server prints its pin so the app can be built with it |
+| Messages | 2-byte length (little-endian), then 1 byte type, then the body; at most 4,096 bytes. A malformed message closes the connection |
+| Registering | The server sends a challenge (32 random bytes). The PC answers Register: its device public key (64 bytes), its signature over "Sheron 1 register" + the challenge, and its addresses. The server checks the signature, then gives the ID tied to that key: the same key always gets the same ID |
+| IDs | 9 digits, 100 000 000 to 999 999 999, chosen at random and never reused. Shown in groups of three |
+| Registry | One text file, one line per device: ID, public key (hex), last seen (Unix seconds). Rewritten whole on a new device (written to a new file, then moved over the old one) and every 5 minutes |
+| Addresses | Each PC sends its LAN addresses with the UDP port of its link socket; the server adds the public address it sees on the TCP connection. Plan step 12 adds the public UDP port |
+| Finding a PC | Find (a 9-digit ID): if that PC is online, the server makes a 16-byte connect ID and sends Found to the asker and Incoming to the target, each with the other's ID, device public key and addresses. The viewer then checks the handshake's host key against the key the server gave for that ID. Otherwise NotFound: unknown ID, or offline |
+| Staying online | The PC sends Ping every 25 s; the server answers Pong and drops a connection silent for 60 s. One connection per device: a new one replaces the old |
+| Limits | At most 20 Find a minute per connection and 30 new connections a minute per IP address; more are refused |
+
+| Type | Byte | Direction | Body |
+| --- | --- | --- | --- |
+| Challenge | 1 | server → PC | Version 1 (1 byte), 32 random bytes |
+| Registered | 2 | server → PC | ID (4 bytes) |
+| Found | 3 | server → viewer | Connect ID (16), ID (4), device public key (64), addresses |
+| Incoming | 4 | server → target | Connect ID (16), viewer's ID (4), viewer's device public key (64), addresses |
+| NotFound | 5 | server → viewer | ID (4), reason (1 byte: 1 unknown, 2 offline, 3 too many tries) |
+| Pong | 6 | server → PC | Nothing |
+| Register | 10 | PC → server | Device public key (64), signature (64), addresses |
+| Find | 11 | PC → server | ID (4) |
+| Ping | 12 | PC → server | Nothing |
+
+Addresses: a count (1 byte), then per address its kind (1 byte: 1 LAN, 2 public as the server sees it), family (1 byte: 4 or 6), the address (4 or 16 bytes) and the UDP port (2 bytes).
+
+Plan step 11 check: two clients on one machine register with a local server, get different IDs, keep them when they come back, and find each other.
 
 ## Risks
 

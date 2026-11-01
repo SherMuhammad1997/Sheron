@@ -2,7 +2,9 @@
 
 Simple, fast remote desktop for Windows. Connect to any PC in the world with a 9-digit ID and a password, see its screen and control it.
 
-Status: Implementation Plan step 9 (remote control) done: Sher controls his second laptop from his own over an iPhone hotspot (1 Nov). Step 8 (view by IP) worked at 61 frames a second, round trip 11 ms. Next is step 10 (automatic quality, jitter buffer).
+Status: Implementation Plan step 11 (server: ID registry and finding PCs over TLS) done in the cloud session. Order from 1 Nov: 12 (address check, hole punching, relay), 16 (passwords), 13 (deploy on Oracle Cloud, Oracle Linux 9), 14, then 10. Step 9 (remote control) worked on Sher's two laptops.
+
+Server: `dotnet run --project src/Sheron.Server -- --port 443 --data <folder>`; it prints the pin the app checks.
 
 One-file test build (PRD decision 1 Nov): `dotnet publish src/Sheron.Win -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:EnableCompressionInSingleFile=true -o <folder>`, then rename `Sheron.Win.exe` to `Sheron.exe`. Copy it to any 64-bit Windows 10/11 PC and double-click: "Share this screen" on the PC to be viewed, "View a PC" with its IP address on the other.
 
