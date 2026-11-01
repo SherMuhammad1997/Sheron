@@ -14,6 +14,12 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-11-02 — New Sheron.exe on the second laptop: double-click, nothing appears  (Plan step 16)
+Symptom:     Double-clicking the new build on PC 2 showed nothing at all; on Sher's PC the same build opened. The Windows event log (.NET Runtime) said: "Failure processing application bundle; possible file corruption. Arithmetic overflow while reading bundle."
+Root cause:  The copy on PC 2 was cut short: 44,201 KB instead of 70,801 KB. A one-file exe that is incomplete cannot read the bundle inside it, and closes before any window, with no message.
+Exact fix:   Copy the exe again with a USB stick, not through a chat app or a browser download, and check its size in Explorer: it must match the size on the PC it came from (this build: 70,801 KB, 72,499,478 bytes). For an exact check in PowerShell: `(Get-Item <file>).Length; (Get-FileHash <file>).Hash`, compared with the numbers given with the build. To see why any Sheron start fails silently: `Get-WinEvent -LogName Application -MaxEvents 100 | Where-Object { $_.Message -match 'Sheron' } | Select-Object -First 3 | Format-List TimeCreated, ProviderName, Message`
+Files:       none (the copy on PC 2)
+
 ### 2026-11-01 — Step 11 test failed now and then: "the silent PC was not dropped"  (Plan step 16)
 Symptom:     After the step 16 tests were added, `A_silent_PC_is_dropped_and_a_pinging_one_stays` failed in about half of the full test runs (`dotnet test`), never when run alone.
 Root cause:  A race in the test. It connected the silent PC, then a second PC, and only then added its Disconnected handler. The server drops a silent PC after the test's 400 ms idle time; the new password tests (PBKDF2, 600,000 rounds) keep the processor busy in parallel, so connecting the second PC sometimes took longer than that and the event had already fired. The server was right.
