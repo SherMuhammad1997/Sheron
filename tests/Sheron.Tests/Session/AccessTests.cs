@@ -1,0 +1,175 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Net;
+using Sheron.Core.Security;
+using Sheron.Core.Session;
+
+namespace Sheron.Tests.Session;
+
+/// <summary>
+/// Plan step 16 with two links on this machine (TRD › Passwords and consent): PRD A3 (the person is asked; Deny
+/// and no answer refuse) and A9 (three wrong passwords lock even the right one), the fixed password, and nothing
+/// getting through before the viewer is let in.
+/// </summary>
+[Collection(Timing.Name)]
+public class AccessTests : IDisposable
+{
+    private static readonly LinkTimings Quick = new(TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(600));
+    private static readonly PasswordHash Fixed = PasswordHash.Create("unattended 1");
+
+    private readonly DeviceKey _hostKey = DeviceKey.Create();
+    private readonly DeviceKey _viewerKey = DeviceKey.Create();
+    private readonly Link _host;
+    private readonly AccessGate _gate = new(Fixed);
+    private readonly HostAccess _access;
+    private readonly ConcurrentQueue<ConsentRequest> _asked = new();
+    private readonly ConcurrentQueue<byte[]> _passedOn = new();
+    private int _letIn;
+    private int _requestsEnded;
+    private readonly List<IDisposable> _viewers = [];
+
+    public AccessTests()
+    {
+        _host = Link.Host(_hostKey, port: 0, Quick);
+        _access = new HostAccess(_host, _gate, consentTimeout: TimeSpan.FromSeconds(1));
+        _access.ConsentNeeded += _asked.Enqueue;
+        _access.ConsentEnded += () => Interlocked.Increment(ref _requestsEnded);
+        _access.LetIn += () => Interlocked.Increment(ref _letIn);
+        _access.ControlReceived += _passedOn.Enqueue;
+    }
+
+    public void Dispose()
+    {
+        foreach (var viewer in _viewers) viewer.Dispose();
+        _access.Dispose();
+        _host.Dispose();
+        _hostKey.Dispose();
+        _viewerKey.Dispose();
+    }
+
+    /// <summary>A viewer that connects and sends <paramref name="password"/> once the session is up.</summary>
+    private (Link Link, ViewerAccess Access) Viewer(string password)
+    {
+        var link = Link.Viewer(_viewerKey, new IPEndPoint(IPAddress.Loopback, _host.LocalEndPoint.Port), Quick);
+        var access = new ViewerAccess(link, password);
+        _viewers.Add(access);
+        _viewers.Add(link);
+        return (link, access);
+    }
+
+    private static bool Within(Func<bool> condition, int ms = 5000)
+    {
+        var clock = Stopwatch.StartNew();
+        while (!condition())
+        {
+            if (clock.ElapsedMilliseconds > ms) return false;
+            Thread.Sleep(5);
+        }
+        return true;
+    }
+
+    private static AccessAnswer WaitFor(ViewerAccess access, AccessResult result)
+    {
+        Assert.True(Within(() => access.Answer?.Result == result), $"wanted {result}, got {access.Answer}");
+        return access.Answer!.Value;
+    }
+
+    [Fact]
+    public void The_one_time_password_asks_the_person_and_Accept_lets_the_viewer_in()
+    {
+        var (link, access) = Viewer(OneTimePassword.Show(_gate.OneTimePassword));
+
+        var asking = WaitFor(access, AccessResult.AskPerson);
+        Assert.Equal(1, asking.Seconds);   // the test's 1 s; 30 s in the app
+        Assert.True(_asked.TryDequeue(out var request));
+        Assert.Equal(_viewerKey.Fingerprint, request!.ViewerFingerprint);
+        Assert.False(_access.IsLetIn);
+
+        // Input before the person accepts is dropped, not applied.
+        link.SendControl(InputMessage.ReleaseAll());
+        Thread.Sleep(100);
+        Assert.Empty(_passedOn);
+
+        request.Accept();
+
+        WaitFor(access, AccessResult.LetIn);
+        Assert.Equal(1, _letIn);
+        Assert.Equal(1, _requestsEnded);
+        link.SendControl(InputMessage.ReleaseAll());
+        Assert.True(Within(() => _passedOn.Count == 1));
+        // A second answer is too late: the first counted.
+        request.Deny();
+        Thread.Sleep(100);
+        Assert.Equal(AccessResult.LetIn, access.Answer!.Value.Result);
+    }
+
+    [Fact]
+    public void Deny_refuses_the_viewer()
+    {
+        var (_, access) = Viewer(_gate.OneTimePassword);
+        WaitFor(access, AccessResult.AskPerson);
+        Assert.True(_asked.TryDequeue(out var request));
+
+        request!.Deny();
+
+        WaitFor(access, AccessResult.Denied);
+        Assert.False(_access.IsLetIn);
+        Assert.Equal(0, _letIn);
+    }
+
+    [Fact]
+    public void With_no_answer_the_request_is_refused_when_its_time_is_up()
+    {
+        var (_, access) = Viewer(_gate.OneTimePassword);
+        WaitFor(access, AccessResult.AskPerson);
+
+        WaitFor(access, AccessResult.NoAnswer);
+        Assert.Null(_access.Pending);
+        Assert.Equal(1, _requestsEnded);
+        Assert.Equal(0, _letIn);
+    }
+
+    [Fact]
+    public void The_fixed_password_lets_in_at_once_with_nobody_asked()
+    {
+        var (_, access) = Viewer("unattended 1");
+
+        WaitFor(access, AccessResult.LetIn);
+        Assert.Empty(_asked);
+        Assert.True(_access.IsLetIn);
+    }
+
+    [Fact]
+    public void Three_wrong_passwords_lock_out_even_the_right_one()
+    {
+        var (_, access) = Viewer("guess 1");
+        Assert.Equal(2, WaitFor(access, AccessResult.Wrong).TriesLeft);
+        access.TryAgain("guess 2");
+        Assert.True(Within(() => access.Answer?.TriesLeft == 1));
+        access.TryAgain("guess 3");
+        Assert.True(Within(() => access.Answer?.TriesLeft == 0));
+        Assert.Equal(new AccessAnswer(AccessResult.Wrong, 0, 30), access.Answer);
+
+        // A new viewer with the right password is locked out too.
+        var (_, second) = Viewer(_gate.OneTimePassword);
+        var locked = WaitFor(second, AccessResult.Locked);
+        Assert.InRange(locked.Seconds, 29, 30);
+        Assert.Empty(_asked);
+    }
+
+    [Fact]
+    public void A_new_one_time_password_is_made_when_a_session_that_was_let_in_ends()
+    {
+        string first = _gate.OneTimePassword;
+        var (link, access) = Viewer(first);
+        WaitFor(access, AccessResult.AskPerson);
+        Assert.True(_asked.TryDequeue(out var request));
+        request!.Accept();
+        WaitFor(access, AccessResult.LetIn);
+
+        // The viewer goes; the remote PC hears nothing for the timeout and ends the session.
+        link.Dispose();
+        Assert.True(Within(() => _gate.OneTimePassword != first));
+        Assert.False(_access.IsLetIn);
+    }
+}

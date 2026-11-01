@@ -14,6 +14,12 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-11-01 — Step 11 test failed now and then: "the silent PC was not dropped"  (Plan step 16)
+Symptom:     After the step 16 tests were added, `A_silent_PC_is_dropped_and_a_pinging_one_stays` failed in about half of the full test runs (`dotnet test`), never when run alone.
+Root cause:  A race in the test. It connected the silent PC, then a second PC, and only then added its Disconnected handler. The server drops a silent PC after the test's 400 ms idle time; the new password tests (PBKDF2, 600,000 rounds) keep the processor busy in parallel, so connecting the second PC sometimes took longer than that and the event had already fired. The server was right.
+Exact fix:   The test checks the client's state (`IsConnected`, added in step 12) instead of waiting for the event, and also checks that the pinging PC is still connected. Lesson: in tests, check state rather than catching events that may come before the handler is added.
+Files:       `tests/Sheron.Tests/Rendezvous/RendezvousTests.cs`
+
 ### 2026-11-01 — Server would drop a PC's whole connection when the other PC left the TCP relay  (Plan step 12)
 Symptom:     Found in review, then shown by the test `When_the_other_PC_leaves_the_TCP_relay_this_PC_stays_online`: once the remote PC disconnected, the viewer's last session packets (Relay data, type 15) made the server close the viewer's TLS connection, so the viewer went offline too.
 Root cause:  The server's message loop accepted Relay data only "when the PC is on a relay"; with the relay already ended, the message fell to the default case, which treats it as a broken protocol and closes the connection.

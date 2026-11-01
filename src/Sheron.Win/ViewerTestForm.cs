@@ -1,19 +1,21 @@
 using System.Diagnostics;
 using System.Net;
+using System.Security.Cryptography;
 using Sheron.Core.Net;
 using Sheron.Core.Security;
 using Sheron.Core.Video;
 using Sheron.Core.Session;
 using LinkState = Sheron.Core.Session.LinkState;
 using Sheron.Win.Encode;
+using Sheron.Win.Security;
 using Sheron.Win.View;
 
 namespace Sheron.Win;
 
 /// <summary>
-/// Developer window for Plan steps 8–9 on the viewer: connects to a remote PC on the same network by IP, shows its
-/// screen and sends the mouse and keyboard used over the picture (TRD › Input path). Open with
-/// <c>Sheron.Win.exe --view &lt;IP&gt;[:port]</c>.
+/// Developer window for Plan steps 8–9 and 16 on the viewer: connects to a remote PC on the same network by IP, sends
+/// the password, and once let in shows its screen and sends the mouse and keyboard used over the picture (TRD › Input
+/// path, Passwords and consent). Opened from the start window, where the password is typed.
 /// </summary>
 internal sealed class ViewerTestForm : DevForm
 {
@@ -21,8 +23,12 @@ internal sealed class ViewerTestForm : DevForm
     private const int MaxEarlyFrames = 60;
 
     private readonly IPEndPoint _remote;
+    private readonly string _password;
     private readonly bool _allowHardwareDecoder;
-    private readonly DeviceKey _key = DeviceKey.Create();
+    private DeviceKey? _key;
+    private string? _keyError;
+    private ViewerAccess? _access;
+    private long _answeredAt;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly object _formatLock = new();
     private readonly List<AssembledFrame> _early = [];
@@ -44,11 +50,12 @@ internal sealed class ViewerTestForm : DevForm
     private AbsolutePoint? _lastMove;
     private RemoteCursor? _cursor;
 
-    public ViewerTestForm(IPEndPoint remote, bool allowHardwareDecoder = true)
-        : base($"viewing {remote} (developer)", $"Viewing {remote} · Plan step 9 · click the picture to control, same network",
+    public ViewerTestForm(IPEndPoint remote, string password, bool allowHardwareDecoder = true)
+        : base($"viewing {remote} (developer)", $"Viewing {remote} · Plan step 16 · click the picture to control, same network",
             new Size(960, 720), headerHeight: 204, rowsPerColumn: 6, withVideo: true)
     {
         _remote = remote;
+        _password = password;
         _allowHardwareDecoder = allowHardwareDecoder;
     }
 
@@ -58,7 +65,20 @@ internal sealed class ViewerTestForm : DevForm
         var video = Video!;
         _viewer = new VideoViewer(video.Handle, video.ClientSize.Width, video.ClientSize.Height, _allowHardwareDecoder);
         video.SizeChanged += (_, _) => _viewer.Resize(video.ClientSize.Width, video.ClientSize.Height);
+        try
+        {
+            _key = DeviceKey.Import(SecretStore.ThisPc().DevicePrivateKey);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or CryptographicException)
+        {
+            _keyError = $"Cannot read this PC's Sheron secrets: {error.Message}";
+            StartRefresh();
+            return;
+        }
         _link = Link.Viewer(_key, _remote);
+        // The password goes once the session is up, inside it (TRD › Passwords and consent).
+        _access = new ViewerAccess(_link, _password);
+        _access.Answered += _ => Interlocked.Exchange(ref _answeredAt, Stopwatch.GetTimestamp());
         _link.FrameReceived += OnFrame;
         _link.ControlReceived += OnControl;
         WireControl(video);
@@ -117,7 +137,11 @@ internal sealed class ViewerTestForm : DevForm
         Send(InputMessage.Wheel(new MouseWheelInput((short)Math.Clamp(delta, short.MinValue, short.MaxValue), horizontal, at)));
     }
 
-    private void Send(byte[] message) => _link?.SendControl(message);
+    /// <summary>Input goes only once the viewer is let in; the remote PC would drop it anyway.</summary>
+    private void Send(byte[] message)
+    {
+        if (_access?.IsLetIn == true) _link?.SendControl(message);
+    }
 
     /// <summary>On the UI thread: the viewer's own pointer over the picture takes the remote shape.</summary>
     private void UseRemoteShape(Core.Capture.PointerShape shape)
@@ -227,6 +251,11 @@ internal sealed class ViewerTestForm : DevForm
     {
         var l = _linkSnapshot;
         var v = _viewerSnapshot;
+        if (_keyError is not null)
+        {
+            yield return ("Status", _keyError, Bad);
+            yield break;
+        }
         if (l is null || v is null)
         {
             yield return ("Status", "Starting", null);
@@ -234,16 +263,16 @@ internal sealed class ViewerTestForm : DevForm
         }
 
         // Left column: who and what.
-        string status = l.State switch
+        var (status, color) = l.State switch
         {
-            LinkState.Connecting => $"Connecting to {_remote} …",
-            LinkState.Lost => "Connection lost (nothing heard for 5 s)",
-            _ => v.Status,
+            LinkState.Connecting => ($"Connecting to {_remote} …", null),
+            LinkState.Lost => ("Connection lost (nothing heard for 5 s)", Bad),
+            _ => AccessStatus() ?? (v.Status, (Color?)null),
         };
-        yield return ("Status", status, l.State == LinkState.Lost ? Bad : null);
+        yield return ("Status", status, color);
         yield return ("Remote PC", $"{_remote}", null);
         yield return ("Remote key", l.PeerFingerprint is { } fingerprint ? KeyFingerprint.Show(fingerprint) : "–", null);
-        yield return ("This PC's key", KeyFingerprint.Show(_key.Fingerprint), null);
+        yield return ("This PC's key", _key is null ? "–" : KeyFingerprint.Show(_key.Fingerprint), null);
         yield return ("Decoder", v.HeldBack > 0 ? $"{v.Decoder} · held back {v.HeldBack}" : v.Decoder, null);
         yield return ("Picture", v.VideoWidth == 0 ? "–"
             : $"{v.VideoWidth} × {v.VideoHeight} shown at {v.Picture.Width} × {v.Picture.Height}", null);
@@ -260,15 +289,34 @@ internal sealed class ViewerTestForm : DevForm
         yield return ("Sheron CPU", $"{CpuPercent:0.0} % of this PC (last 3 s)", null);
     }
 
+    /// <summary>What the remote PC answered, until the viewer is let in (TRD › Passwords and consent).</summary>
+    private (string, Color?)? AccessStatus()
+    {
+        if (_access?.Answer is not { } answer) return ("Connected · sending the password …", null);
+        double waited = Stopwatch.GetElapsedTime(Interlocked.Read(ref _answeredAt)).TotalSeconds;
+        return answer.Result switch
+        {
+            AccessResult.AskPerson => ($"Waiting for the person at the remote PC to accept ({Math.Max(0, Math.Ceiling(answer.Seconds - waited))} s)", Accent),
+            AccessResult.Wrong when answer.TriesLeft > 0 =>
+                ($"Wrong password · {answer.TriesLeft} {(answer.TriesLeft == 1 ? "try" : "tries")} left · close this window to try again", Bad),
+            AccessResult.Wrong => ($"Wrong password · that PC is locked for {answer.Seconds} s", Bad),
+            AccessResult.Locked => ($"That PC is locked for {Math.Max(0, Math.Ceiling(answer.Seconds - waited))} s after 3 wrong passwords", Bad),
+            AccessResult.Denied => ("The person at the remote PC said no", Bad),
+            AccessResult.NoAnswer => ("Nobody at the remote PC answered in 30 s", Bad),
+            _ => null,
+        };
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
             // Let go of anything held, then the link: it hands frames to the viewer.
-            _link?.SendControl(InputMessage.ReleaseAll());
+            Send(InputMessage.ReleaseAll());
+            _access?.Dispose();
             _link?.Dispose();
             _viewer?.Dispose();
-            _key.Dispose();
+            _key?.Dispose();
             if (Video is { } video) video.Cursor = Cursors.Default;
             _cursor?.Dispose();
         }

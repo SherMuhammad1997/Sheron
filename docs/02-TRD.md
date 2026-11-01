@@ -169,15 +169,15 @@ Plan step 9 check, 1 Nov: Sher controlled his second laptop from his own over th
 
 ## Connect by IP (Plan step 8, developer mode)
 
-Before the server exists (Plan steps 11–14), two PCs on the same network connect by IP address. This is a developer mode: no ID or password yet (Plan steps 11 and 16).
+Before the server exists (Plan steps 11–14), two PCs on the same network connect by IP address. This is a developer mode: no ID; the password and request work as in Plan step 16.
 
 | Item | Rule |
 | --- | --- |
-| Remote PC | `Sheron.Win.exe --host [--port 47920]` opens a window that says the screen can be viewed and controlled, shows this PC's IP addresses and key fingerprint, who is viewing, and when the viewer last used the mouse or keyboard. Sharing and control last only while that window is open; there is no hidden mode |
-| Viewer | `Sheron.Win.exe --view <IP>[:port]` opens a window with the remote screen and its figures |
-| Start window | Started with no switches, Sheron opens a small start window until the home screen exists (Plan step 15, PRD decision 1 Nov): "Share this screen" opens the remote PC's window; "View a PC" with an IP address typed in opens the viewer. Both choices drawn on the form; the IP box is the one real control |
+| Remote PC | `Sheron.Win.exe --host [--port 47920]` opens a window that says the screen can be viewed and controlled, shows this PC's IP addresses, key fingerprint and one-time password, who is viewing, and when the viewer last used the mouse or keyboard. A viewer with the one-time password is shown there as a request with Accept and Deny (Plan step 16). Sharing and control last only while that window is open; there is no hidden mode |
+| Viewer | `Sheron.Win.exe --view <IP>[:port]` opens the start window with that address filled in, to type the password (never on the command line, where other programs can read it); the viewer window shows the remote screen and its figures |
+| Start window | Started with no switches, Sheron opens a small start window until the home screen exists (Plan step 15, PRD decision 1 Nov): "Share this screen" opens the remote PC's window; "View a PC" with an IP address and password typed in opens the viewer. Both choices drawn on the form; the IP and password boxes are the only real controls |
 | One file | `dotnet publish src/Sheron.Win -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:EnableCompressionInSingleFile=true` makes one `Sheron.exe` that holds .NET, the libraries and libvpl.dll and unpacks them to the user's temp folder when it starts. It is not signed yet (Plan step 20), so Windows SmartScreen asks first ("More info", "Run anyway") |
-| Device keys | Made fresh each run until Plan step 16 stores them with DPAPI; both windows show both fingerprints so they can be compared by eye |
+| Device keys | Kept in the secrets file from Plan step 16, so a PC has the same key every run; both windows show both fingerprints so they can be compared by eye |
 | Socket | One UDP socket per side; receive and send buffers of 4 MB, so a keyframe's packets fit while they are read. A "connection reset" from Windows (an ICMP reply to an earlier packet) is ignored |
 | Handshake | The viewer sends Hello every 500 ms until a Welcome comes, then Finish every 500 ms until the first sealed packet comes. The host answers a repeated Hello with the same Welcome. One viewer at a time: a new finished handshake replaces the old session |
 | Capture | The remote PC starts capturing and encoding when a viewer's handshake finishes, so the first frame the viewer gets is a keyframe; it stops when the viewer goes |
@@ -239,12 +239,36 @@ Measured 1 Nov on Sher's two laptops, both on an iPhone hotspot (each packet cro
 | Session keys | New ECDH P-256 key per session, signed by both device keys; HKDF-SHA256 → AES-256-GCM, one key per direction; counter nonces; replay window |
 | End to end | The server only sees sealed packets and never has the session keys |
 | Server link | TLS 1.3, or 1.2 where Windows 10 has no 1.3; the server's certificate key is pinned in the app either way (Rendezvous protocol, below) |
-| One-time password | 8 characters from a 32-character set with no look-alikes (no 0/O, 1/I/L); new after every session |
-| Fixed password | PBKDF2-SHA256, 600,000 rounds, 16-byte salt; only the hash is stored |
+| One-time password | 8 characters from the 31 with no look-alikes: digits 2–9 and capital letters except I, L and O (no 0/O, 1/I/L; "32" before 1 Nov was a miscount). Shown as two groups of four; typed with or without the space, in either case. New after every session that was let in |
+| Fixed password | 8 to 64 characters. PBKDF2-SHA256, 600,000 rounds, 16-byte salt; only the hash is stored |
 | Password check | Only inside the encrypted channel |
-| Wrong password | 3 tries → 30 s lock on that ID; the server also limits tries |
+| Wrong password | 3 wrong passwords in a row, from any viewer, lock the remote PC's ID for 30 s: it refuses every password, the right one too. A right password resets the count. The server also limits tries (20 Find a minute) |
 | Consent | Without a fixed password the person at the remote PC must Accept. The banner is always shown. There is no hidden or silent mode |
 | Logs | Never log passwords, keys or screen content |
+
+### Passwords and consent (Plan step 16)
+
+After the session handshake the remote PC sends nothing and takes no input until the viewer is let in. The password goes only inside the sealed session, which is tied to the remote PC's device key (with connect by ID, the key the server gave for that ID).
+
+| Step | What happens |
+| --- | --- |
+| 1 | The viewer sends Access request with the password typed |
+| 2 | Locked: answer Locked with the seconds left. The password is not checked and does not count |
+| 3 | It is the one-time password: the person at the remote PC is asked (incoming request: viewer's address and key, Accept, Deny). Answer Asking with 30 s. Accept: Let in. Deny: Denied. No answer within 30 s: No answer |
+| 4 | It is the fixed password: Let in at once, with nobody asked (unattended access) |
+| 5 | Neither: Wrong, with the tries left; the third in a row also starts the 30 s lock. The viewer may try again in the same session |
+| After | Let in: the remote PC starts capture and takes input. When that session ends, a new one-time password is made |
+
+The one-time password is checked first (it is cheap); the fixed password costs one PBKDF2 (about 0.3 s), done off the link's thread. Messages sent before the viewer is let in, other than Access request, are dropped.
+
+| Control message | Byte 0 | Then |
+| --- | --- | --- |
+| Access request (viewer → remote PC) | 11 | Length (1 byte), the password in UTF-8 (1–255 bytes) |
+| Access answer (remote PC → viewer) | 12 | Result (1 byte: 1 let in, 2 asking the person, 3 wrong password, 4 locked, 5 denied, 6 no answer), tries left (1 byte), seconds (2 bytes: time left to answer, or lock time left) |
+
+**Secrets file** `%ProgramData%\Sheron\secrets.bin`: DPAPI, machine scope (so the service of Plan step 17 can read it), with "Sheron 1 secrets" as extra entropy. Inside: version (1 byte, 1); the device private key (2-byte length, PKCS#8); the fixed password (1 byte: 0 none, 1 set; then rounds (4 bytes), salt (16), hash (32)). Machine-scope DPAPI lets any program on the PC open it, so the file itself is only for SYSTEM, Administrators and the Windows user who made it (nothing inherited from the folder). It is written to a new file, then moved over the old one. A file that cannot be opened (for example copied from another PC) is kept as `secrets.bin.unreadable` and new secrets are made: a new device key, so a new ID.
+
+Plan step 16 check: unit tests for the password rules, the lock and the secrets format; session tests with two links on this machine: one-time password asks the person (Accept lets in, Deny and no answer refuse), the fixed password lets in at once, three wrong passwords lock even the right one for 30 s (PRD A3, A9). Windows tests for the DPAPI file. Then Sher checks A3 and A9 on his two laptops by IP.
 
 ### Session handshake and sealed packets (Plan step 7)
 

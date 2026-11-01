@@ -2,7 +2,7 @@
 
 Simple, fast remote desktop for Windows. Connect to any PC in the world with a 9-digit ID and a password, see its screen and control it.
 
-Status: Implementation Plan step 12 (address check, hole punching, UDP relay, TCP 443 relay) done in the cloud session, tested through the network simulator. Order from 1 Nov: 16 (passwords), 13 (deploy on Oracle Cloud, Oracle Linux 9), 14, then 10. Step 9 (remote control) worked on Sher's two laptops.
+Status: Implementation Plan step 16 (one-time and fixed passwords, DPAPI secrets, 3 tries then 30 s lock, Accept or Deny) built and tested in the cloud session; Sher's laptop check of PRD A3 and A9 is next. Step 12 (address check, hole punching, relay, TCP 443) done through the network simulator. Order from 1 Nov: 13 (deploy on Oracle Cloud, Oracle Linux 9), 14, then 10.
 
 Server: `dotnet run --project src/Sheron.Server -- --port 443 --data <folder>` (TCP and UDP on that port); it prints the pin the app checks.
 

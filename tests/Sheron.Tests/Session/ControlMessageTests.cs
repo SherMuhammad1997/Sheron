@@ -1,4 +1,5 @@
 using Sheron.Core.Capture;
+using Sheron.Core.Security;
 using Sheron.Core.Session;
 
 namespace Sheron.Tests.Session;
@@ -39,5 +40,21 @@ public class ControlMessageTests
         Assert.False(ControlMessage.TryReadVideoFormat(ControlMessage.VideoFormat(1921, 1080), out _, out _));
         Assert.False(ControlMessage.TryReadVideoFormat(ControlMessage.VideoFormat(0, 1080), out _, out _));
         Assert.False(ControlMessage.TryReadVideoFormat(ControlMessage.VideoFormat(1920, -2), out _, out _));
+    }
+
+    [Fact]
+    public void Access_request_and_answer_read_back_and_damaged_ones_are_refused()
+    {
+        Assert.True(ControlMessage.TryReadAccessRequest(ControlMessage.AccessRequest("pässwort 1"), out string password));
+        Assert.Equal("pässwort 1", password);
+        var answer = new AccessAnswer(AccessResult.Locked, 0, 27);
+        Assert.True(ControlMessage.TryReadAnswer(ControlMessage.Answer(answer), out var back));
+        Assert.Equal(answer, back);
+
+        Assert.Throws<ArgumentException>(() => ControlMessage.AccessRequest(""));
+        Assert.False(ControlMessage.TryReadAccessRequest([(byte)ControlType.AccessRequest, 5, (byte)'a'], out _));   // shorter than its length
+        Assert.False(ControlMessage.TryReadAccessRequest([(byte)ControlType.AccessRequest, 1, 0xFF], out _));       // not UTF-8
+        Assert.False(ControlMessage.TryReadAnswer([(byte)ControlType.AccessAnswer, 9, 0, 0, 0], out _));            // unknown result
+        Assert.False(ControlMessage.TryReadAnswer([(byte)ControlType.AccessAnswer, 1, 0, 0], out _));
     }
 }

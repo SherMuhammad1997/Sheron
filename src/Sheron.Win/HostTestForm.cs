@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using Sheron.Core.Capture;
 using Sheron.Core.Security;
 using Sheron.Core.Session;
@@ -8,21 +9,37 @@ using LinkState = Sheron.Core.Session.LinkState;
 using Sheron.Win.Capture;
 using Sheron.Win.Encode;
 using Sheron.Win.Input;
+using Sheron.Win.Security;
 
 namespace Sheron.Win;
 
 /// <summary>
-/// Developer window for Plan steps 8–9 on the remote PC: lets one viewer on the same network see this screen and use
-/// its mouse and keyboard, and shows who is viewing and when they last used the input. Sharing and control last
-/// only while this window is open; there is no hidden mode (CLAUDE.md › Hard rules).
-/// Open with <c>Sheron.Win.exe --host [--port 47920]</c>.
+/// Developer window for Plan steps 8–9 and 16 on the remote PC: lets one viewer on the same network see this screen
+/// and use its mouse and keyboard, and shows who is viewing and when they last used the input. A viewer needs the
+/// one-time password shown here, and the person here must Accept (TRD › Passwords and consent); the fixed password
+/// lets in with nobody asked. Sharing and control last only while this window is open; there is no hidden mode
+/// (CLAUDE.md › Hard rules). Open with <c>Sheron.Win.exe --host [--port 47920]</c>.
 /// </summary>
 internal sealed class HostTestForm : DevForm
 {
+    /// <summary>Top of the request panel at 96 DPI, below the figures.</summary>
+    private const int RequestTop = 236;
+    private const int RequestHeight = 76;
+    private static readonly Color Panel = Color.FromArgb(0x15, 0x1E, 0x28);
+    private static readonly Color PanelHover = Color.FromArgb(0x1C, 0x28, 0x36);
+
     private readonly int _port;
     private readonly bool _allowHardwareEncoder;
-    private readonly DeviceKey _key = DeviceKey.Create();
     private readonly string _addresses = LocalAddresses();
+    private readonly Font _requestFont = new("Segoe UI Semibold", 11f);
+    private readonly Font _requestTextFont = new("Segoe UI", 10f);
+    private DeviceKey? _key;
+    private AccessGate? _gate;
+    private HostAccess? _access;
+    private ConsentRequest? _request;
+    private Rectangle _acceptButton;
+    private Rectangle _denyButton;
+    private Rectangle? _hover;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly InputInjector _input = new();
     private Link? _link;
@@ -35,8 +52,8 @@ internal sealed class HostTestForm : DevForm
     private double _megabitsPerSecond;
 
     public HostTestForm(int port, bool allowHardwareEncoder = true)
-        : base("sharing this screen (developer)", "Sharing this screen · the viewer can use this PC's mouse and keyboard · close this window to stop",
-            new Size(960, 260), headerHeight: 260, rowsPerColumn: 6, withVideo: false)
+        : base("sharing this screen (developer)", "Sharing this screen · a viewer needs the one-time password and your OK · close this window to stop",
+            new Size(960, 330), headerHeight: 330, rowsPerColumn: 7, withVideo: false)
     {
         _port = port;
         _allowHardwareEncoder = allowHardwareEncoder;
@@ -47,26 +64,53 @@ internal sealed class HostTestForm : DevForm
         base.OnShown(e);
         try
         {
+            var secrets = SecretStore.ThisPc();
+            _key = DeviceKey.Import(secrets.DevicePrivateKey);
+            _gate = new AccessGate(secrets.FixedPassword);
             _link = Link.Host(_key, _port);
-            // Capture runs only while a viewer is connected, so each viewer's first frame is a keyframe.
-            _link.Connected += () => OnUiThread(StartSharing);
+            _access = new HostAccess(_link, _gate);
+            // Capture runs only once the viewer is let in, so its first frame is a keyframe and nothing shows before.
+            _access.LetIn += () => OnUiThread(StartSharing);
+            _access.ConsentNeeded += request => OnUiThread(() => ShowRequest(request));
+            _access.ConsentEnded += () => OnUiThread(HideRequest);
             // Nothing the viewer held stays pressed once it is gone (TRD › Input path › Stuck keys).
             _link.Disconnected += () =>
             {
                 _input.ReleaseAll();
                 OnUiThread(StopSharing);
             };
-            _link.ControlReceived += message =>
+            // Only messages from a viewer who is let in come through.
+            _access.ControlReceived += message =>
             {
                 if (ControlMessage.TypeOf(message) == ControlType.KeyFrameRequest) Volatile.Read(ref _capture)?.RequestKeyFrame();
                 else _input.Apply(message);
             };
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or CryptographicException)
+        {
+            _linkError = $"Cannot read this PC's Sheron secrets: {error.Message}";
         }
         catch (SocketException error)
         {
             _linkError = $"Cannot use UDP port {_port}: {error.Message}";
         }
         StartRefresh();
+    }
+
+    /// <summary>A viewer with the one-time password: the person here is asked, in this window, which comes to the front.</summary>
+    private void ShowRequest(ConsentRequest request)
+    {
+        _request = request;
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        Activate();
+        Invalidate();
+    }
+
+    private void HideRequest()
+    {
+        if (_access?.Pending is not null) return;
+        _request = null;
+        Invalidate();
     }
 
     private void StartSharing()
@@ -101,19 +145,27 @@ internal sealed class HostTestForm : DevForm
     {
         var l = _linkSnapshot;
         var c = _captureSnapshot;
-        bool viewed = l?.State == LinkState.Connected;
-        string status = _linkError
-            ?? (viewed ? "Being viewed" : $"Waiting for a viewer on UDP {_port}");
+        bool connected = l?.State == LinkState.Connected;
+        bool viewed = connected && _access?.IsLetIn == true;
+        var locked = _gate?.LockedFor ?? TimeSpan.Zero;
+        (string Text, Color? Color) status = _linkError is not null ? (_linkError, Bad)
+            : locked > TimeSpan.Zero ? ($"Locked for {Math.Ceiling(locked.TotalSeconds)} s after 3 wrong passwords", Bad)
+            : _request is not null ? ("A viewer is asking: Accept or Deny below", Accent)
+            : viewed ? ("Being viewed", Accent)
+            : connected ? ("A viewer connected · checking the password", null)
+            : ($"Waiting for a viewer on UDP {_port}", null);
 
         // Left column: who.
-        yield return ("Status", status, _linkError is null ? (viewed ? Accent : null) : Bad);
+        yield return ("Status", status.Text, status.Color);
         yield return ("This PC", $"{_addresses} · port {_port}", null);
-        yield return ("This PC's key", KeyFingerprint.Show(_key.Fingerprint), null);
-        yield return ("Viewer", viewed ? $"{l!.Peer}" : "–", null);
-        yield return ("Viewer's key", viewed && l!.PeerFingerprint is { } fingerprint ? KeyFingerprint.Show(fingerprint) : "–", null);
+        yield return ("One-time password", _gate is null ? "–" : OneTimePassword.Show(_gate.OneTimePassword), Accent);
+        yield return ("This PC's key", _key is null ? "–" : KeyFingerprint.Show(_key.Fingerprint), null);
+        yield return ("Viewer", connected ? $"{l!.Peer}" : "–", null);
+        yield return ("Viewer's key", connected && l!.PeerFingerprint is { } fingerprint ? KeyFingerprint.Show(fingerprint) : "–", null);
         yield return ("Encoder", c?.Encoder ?? "–", null);
 
         // Right column: how much.
+        yield return ("Unattended", _gate?.FixedPassword is null ? "off · every viewer must be accepted here" : "on · the fixed password lets in with nobody asked", null);
         yield return ("Graphics", c?.Adapter ?? "–", null);
         yield return ("Capture", c is null ? "–" : $"{c.Stats.FramesPerSecond} fps · {c.Stats.AverageFrameMs:0.00} ms", null);
         yield return ("Sent", viewed ? $"{_framesPerSecond:0} frames/s · {_megabitsPerSecond:0.0} Mbit/s" : "–", null);
@@ -124,6 +176,73 @@ internal sealed class HostTestForm : DevForm
             : $"last input {Stopwatch.GetElapsedTime(lastInput).TotalSeconds:0.0} s ago"
                 + (_input.Blocked > 0 ? $" · {_input.Blocked} blocked by Windows" : ""), viewed && lastInput != 0 ? Accent : null);
         yield return ("Sheron CPU", $"{CpuPercent:0.0} % of this PC (last 3 s)", null);
+    }
+
+    protected override void OnLayout(LayoutEventArgs e)
+    {
+        base.OnLayout(e);
+        int margin = LogicalToDeviceUnits(20);
+        int buttonWidth = LogicalToDeviceUnits(110);
+        int buttonHeight = LogicalToDeviceUnits(36);
+        int top = LogicalToDeviceUnits(RequestTop) + (LogicalToDeviceUnits(RequestHeight) - buttonHeight) / 2;
+        int right = ClientSize.Width - margin - LogicalToDeviceUnits(16);
+        _denyButton = new Rectangle(right - buttonWidth, top, buttonWidth, buttonHeight);
+        _acceptButton = new Rectangle(_denyButton.Left - LogicalToDeviceUnits(12) - buttonWidth, top, buttonWidth, buttonHeight);
+    }
+
+    /// <summary>The request, drawn below the figures (CLAUDE.md › Windows UI: no extra native controls).</summary>
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        var g = e.Graphics;
+        int margin = LogicalToDeviceUnits(20);
+        var panel = new Rectangle(margin, LogicalToDeviceUnits(RequestTop), ClientSize.Width - 2 * margin, LogicalToDeviceUnits(RequestHeight));
+        if (_request is not { } request)
+        {
+            TextRenderer.DrawText(g, "Before anyone sees this screen, you are asked here: Accept or Deny.", _requestTextFont,
+                new Point(panel.Left, panel.Top + LogicalToDeviceUnits(8)), Muted);
+            return;
+        }
+
+        using (var fill = new SolidBrush(Panel)) g.FillRectangle(fill, panel);
+        using (var border = new Pen(Accent, LogicalToDeviceUnits(2))) g.DrawRectangle(border, panel);
+        int textLeft = panel.Left + LogicalToDeviceUnits(16);
+        TextRenderer.DrawText(g, "A viewer asks to see and control this screen", _requestFont,
+            new Point(textLeft, panel.Top + LogicalToDeviceUnits(12)), Value);
+        string who = request.ViewerFingerprint is { } key ? $"{request.Viewer} · key {KeyFingerprint.Show(key)}" : $"{request.Viewer}";
+        TextRenderer.DrawText(g, $"{who} · refused by itself in {Math.Ceiling(request.TimeLeft.TotalSeconds)} s", _requestTextFont,
+            new Rectangle(textLeft, panel.Top + LogicalToDeviceUnits(40), _acceptButton.Left - textLeft - LogicalToDeviceUnits(12), LogicalToDeviceUnits(24)),
+            Muted, TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        DrawButton(g, _acceptButton, "Accept", Good);
+        DrawButton(g, _denyButton, "Deny", Bad);
+    }
+
+    private void DrawButton(Graphics g, Rectangle area, string label, Color edge)
+    {
+        using (var fill = new SolidBrush(_hover == area ? PanelHover : Background)) g.FillRectangle(fill, area);
+        using (var border = new Pen(edge, LogicalToDeviceUnits(2))) g.DrawRectangle(border, area);
+        TextRenderer.DrawText(g, label, _requestFont, area, Value, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        Rectangle? over = _request is null ? null
+            : _acceptButton.Contains(e.Location) ? _acceptButton
+            : _denyButton.Contains(e.Location) ? _denyButton
+            : null;
+        if (over == _hover) return;
+        _hover = over;
+        Cursor = over is null ? Cursors.Default : Cursors.Hand;
+        Invalidate();
+    }
+
+    protected override void OnMouseClick(MouseEventArgs e)
+    {
+        base.OnMouseClick(e);
+        if (e.Button != MouseButtons.Left || _request is not { } request) return;
+        if (_acceptButton.Contains(e.Location)) request.Accept();
+        else if (_denyButton.Contains(e.Location)) request.Deny();
     }
 
     /// <summary>This PC's IPv4 addresses on networks that are up, for the viewer to type.</summary>
@@ -143,9 +262,12 @@ internal sealed class HostTestForm : DevForm
         if (disposing)
         {
             StopSharing();
+            _access?.Dispose();
             _link?.Dispose();
             _input.ReleaseAll();
-            _key.Dispose();
+            _key?.Dispose();
+            _requestFont.Dispose();
+            _requestTextFont.Dispose();
         }
         base.Dispose(disposing);
     }

@@ -10,15 +10,15 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
         // Developer windows instead of the app: --capture-test for Plan steps 3–4, --loop-test for step 5,
-        // --host [--port N] and --view <IP>[:port] for step 8. --software-encoder and --software-decoder skip the
-        // hardware routes.
+        // --host [--port N] for step 8, and --view <IP>[:port], which fills in the start window (the password is typed
+        // there, never given on the command line). --software-encoder and --software-decoder skip the hardware routes.
         bool hardwareEncoder = !args.Contains("--software-encoder");
         bool hardwareDecoder = !args.Contains("--software-decoder");
         Form? first = args.Contains("--capture-test") ? new CaptureTestForm(hardwareEncoder)
             : args.Contains("--loop-test") ? new LoopTestForm(hardwareEncoder, hardwareDecoder)
             : args.Contains("--host") ? HostForm(args, hardwareEncoder)
             : args.Contains("--view") ? ViewerForm(args, hardwareDecoder)
-            : new MainForm();
+            : new MainForm(hardwareDecoder: hardwareDecoder);
         if (first is not null) Application.Run(first);
     }
 
@@ -36,8 +36,7 @@ internal static class Program
         string? text = ValueAfter(args, "--view");
         if (text is null || !IPEndPoint.TryParse(text, out var remote))
             return Refuse("Give the remote PC's address after --view, such as --view 192.168.1.20 or --view 192.168.1.20:47920.");
-        if (remote.Port == 0) remote.Port = Link.DefaultPort;
-        return new ViewerTestForm(remote, hardwareDecoder);
+        return new MainForm(text, hardwareDecoder);
     }
 
     private static string? ValueAfter(string[] args, string name)

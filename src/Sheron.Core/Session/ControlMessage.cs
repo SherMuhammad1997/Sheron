@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text;
 using Sheron.Core.Capture;
 
 namespace Sheron.Core.Session;
@@ -20,7 +21,15 @@ public enum ControlType : byte
 
     /// <summary>Viewer → remote PC: send a keyframe now (TRD › Connect by IP › After a lost frame).</summary>
     KeyFrameRequest = 10,
+
+    /// <summary>Viewer → remote PC: the password typed (TRD › Passwords and consent, Plan step 16).</summary>
+    AccessRequest = 11,
+    /// <summary>Remote PC → viewer: let in, asking the person, wrong, locked, denied or no answer.</summary>
+    AccessAnswer = 12,
 }
+
+/// <summary>The remote PC's answer to an access request: the result, tries left before the lock, and seconds (time to answer, or lock left).</summary>
+public readonly record struct AccessAnswer(Security.AccessResult Result, int TriesLeft, int Seconds);
 
 /// <summary>Control messages that go over the reliable channel: building them, and reading them back with checks.</summary>
 public static class ControlMessage
@@ -121,6 +130,50 @@ public static class ControlMessage
         if (message.Length != 10 || message[0] != (byte)ControlType.PointerPosition) return false;
         position = new PointerPosition(message[1] != 0,
             BinaryPrimitives.ReadInt32LittleEndian(message[2..]), BinaryPrimitives.ReadInt32LittleEndian(message[6..]));
+        return true;
+    }
+
+    /// <summary>Access request: the password in UTF-8 after a 1-byte length. Secret: never log it.</summary>
+    public static byte[] AccessRequest(string password)
+    {
+        byte[] text = Encoding.UTF8.GetBytes(password);
+        if (text.Length is 0 or > byte.MaxValue) throw new ArgumentException("A password is 1–255 bytes in UTF-8.", nameof(password));
+        return [(byte)ControlType.AccessRequest, (byte)text.Length, .. text];
+    }
+
+    public static bool TryReadAccessRequest(ReadOnlySpan<byte> message, out string password)
+    {
+        password = "";
+        if (message.Length < 3 || message[0] != (byte)ControlType.AccessRequest || message[1] == 0 || message.Length != 2 + message[1])
+            return false;
+        try
+        {
+            password = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(message[2..]);
+            return true;
+        }
+        catch (DecoderFallbackException)
+        {
+            return false;
+        }
+    }
+
+    public static byte[] Answer(AccessAnswer answer)
+    {
+        var message = new byte[5];
+        message[0] = (byte)ControlType.AccessAnswer;
+        message[1] = (byte)answer.Result;
+        message[2] = (byte)Math.Clamp(answer.TriesLeft, 0, byte.MaxValue);
+        BinaryPrimitives.WriteUInt16LittleEndian(message.AsSpan(3), (ushort)Math.Clamp(answer.Seconds, 0, ushort.MaxValue));
+        return message;
+    }
+
+    public static bool TryReadAnswer(ReadOnlySpan<byte> message, out AccessAnswer answer)
+    {
+        answer = default;
+        if (message.Length != 5 || message[0] != (byte)ControlType.AccessAnswer) return false;
+        var result = (Security.AccessResult)message[1];
+        if (!Enum.IsDefined(result)) return false;
+        answer = new AccessAnswer(result, message[2], BinaryPrimitives.ReadUInt16LittleEndian(message[3..]));
         return true;
     }
 }

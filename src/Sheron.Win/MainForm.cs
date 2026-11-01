@@ -6,7 +6,8 @@ namespace Sheron.Win;
 
 /// <summary>
 /// Start window until the home screen is built (Plan step 15; PRD decision 1 Nov): "Share this screen" or "View a PC"
-/// by IP address. The choices are drawn on the form; the IP box is the one real control (CLAUDE.md › Windows UI).
+/// by IP address and password. The choices are drawn on the form; the IP and password boxes are the only real
+/// controls (CLAUDE.md › Windows UI). Closing a viewer window comes back here.
 /// </summary>
 internal sealed class MainForm : Form
 {
@@ -20,7 +21,10 @@ internal sealed class MainForm : Form
     private static readonly Color Bad = Color.FromArgb(0xE5, 0x53, 0x4B);
     private const TextFormatFlags Wrapped = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix;
 
-    private readonly TextBox _address = new() { BorderStyle = BorderStyle.FixedSingle, PlaceholderText = "IP address, such as 192.168.1.20" };
+    private readonly TextBox _address = new() { BorderStyle = BorderStyle.FixedSingle, PlaceholderText = "IP, such as 192.168.1.20" };
+    // The password is never put on the command line, where other programs can read it (TRD › Connect by IP).
+    private readonly TextBox _password = new() { BorderStyle = BorderStyle.FixedSingle, PlaceholderText = "Password", UseSystemPasswordChar = true };
+    private readonly bool _hardwareDecoder;
     private readonly Font _titleFont = new("Segoe UI Semibold", 15f);
     private readonly Font _buttonFont = new("Segoe UI Semibold", 12f);
     private readonly Font _textFont = new("Segoe UI", 10f);
@@ -30,8 +34,10 @@ internal sealed class MainForm : Form
     private Rectangle? _hover;
     private string? _problem;
 
-    public MainForm()
+    /// <param name="address">An IP address to fill in (from <c>--view</c>); the password is then typed.</param>
+    public MainForm(string? address = null, bool hardwareDecoder = true)
     {
+        _hardwareDecoder = hardwareDecoder;
         // Sizes are at 96 DPI; ResumeLayout scales them to the screen's DPI.
         SuspendLayout();
         AutoScaleDimensions = new SizeF(96f, 96f);
@@ -46,14 +52,23 @@ internal sealed class MainForm : Form
         _address.Font = _addressFont;
         _address.BackColor = Panel;
         _address.ForeColor = Ink;
-        _address.KeyDown += (_, e) =>
+        _address.Text = address ?? "";
+        _password.Font = _addressFont;
+        _password.BackColor = Panel;
+        _password.ForeColor = Ink;
+        foreach (var box in new[] { _address, _password })
         {
-            if (e.KeyCode != Keys.Enter) return;
-            e.SuppressKeyPress = true;
-            View();
-        };
+            box.KeyDown += (_, e) =>
+            {
+                if (e.KeyCode != Keys.Enter) return;
+                e.SuppressKeyPress = true;
+                View();
+            };
+        }
         Controls.Add(_address);
+        Controls.Add(_password);
         ResumeLayout(false);
+        if (address is not null) Shown += (_, _) => _password.Focus();
     }
 
     protected override void OnLayout(LayoutEventArgs e)
@@ -65,7 +80,9 @@ internal sealed class MainForm : Form
         int addressTop = LogicalToDeviceUnits(232);
         int buttonWidth = LogicalToDeviceUnits(120);
         int gap = LogicalToDeviceUnits(12);
-        _address.Bounds = new Rectangle(margin, addressTop, width - buttonWidth - gap, _address.PreferredHeight);
+        int passwordWidth = LogicalToDeviceUnits(140);
+        _address.Bounds = new Rectangle(margin, addressTop, width - passwordWidth - buttonWidth - 2 * gap, _address.PreferredHeight);
+        _password.Bounds = new Rectangle(_address.Right + gap, addressTop, passwordWidth, _password.PreferredHeight);
         _viewButton = new Rectangle(margin + width - buttonWidth, addressTop, buttonWidth, _address.PreferredHeight);
     }
 
@@ -77,15 +94,15 @@ internal sealed class MainForm : Form
         int width = ClientSize.Width - 2 * margin;
 
         TextRenderer.DrawText(g, AppInfo.Name, _titleFont, new Point(margin, LogicalToDeviceUnits(20)), Accent);
-        TextRenderer.DrawText(g, "Test version · same network only · no password yet", _textFont,
+        TextRenderer.DrawText(g, "Test version · same network only", _textFont,
             new Point(margin, LogicalToDeviceUnits(56)), Muted);
 
         DrawButton(g, _shareButton, "Share this screen");
-        TextRenderer.DrawText(g, "Use this on the PC to be viewed. A window shows who is viewing; close it to stop.", _textFont,
+        TextRenderer.DrawText(g, "Use this on the PC to be viewed. Its window shows the password, asks you before anyone views, and stops when closed.", _textFont,
             Rectangle.Inflate(new Rectangle(_shareButton.Left, _shareButton.Top + _shareButton.Height / 2, _shareButton.Width, _shareButton.Height / 2), -LogicalToDeviceUnits(16), 0),
             Muted, Wrapped);
 
-        TextRenderer.DrawText(g, "View a PC: type the IP address its sharing window shows", _textFont,
+        TextRenderer.DrawText(g, "View a PC: type the IP address and password its sharing window shows", _textFont,
             new Point(margin, _address.Top - LogicalToDeviceUnits(28)), Ink);
         DrawButton(g, _viewButton, "View");
 
@@ -135,10 +152,34 @@ internal sealed class MainForm : Form
             return;
         }
         if (remote.Port == 0) remote.Port = Link.DefaultPort;
-        Open(new ViewerTestForm(remote));
+        if (_password.Text.Length == 0)
+        {
+            _problem = "Type the password the sharing window shows.";
+            Invalidate();
+            _password.Focus();
+            return;
+        }
+        if (System.Text.Encoding.UTF8.GetByteCount(_password.Text) > byte.MaxValue)
+        {
+            _problem = "That password is too long.";
+            Invalidate();
+            return;
+        }
+
+        _problem = null;
+        var viewer = new ViewerTestForm(remote, _password.Text, _hardwareDecoder);
+        _password.Clear();
+        // Closing the viewer comes back here, to try again or view another PC.
+        viewer.FormClosed += (_, _) =>
+        {
+            Show();
+            _password.Focus();
+        };
+        viewer.Show();
+        Hide();
     }
 
-    /// <summary>Shows the chosen window in place of this one; closing it ends Sheron.</summary>
+    /// <summary>Shows the sharing window in place of this one; closing it ends Sheron.</summary>
     private void Open(Form next)
     {
         next.FormClosed += (_, _) => Close();

@@ -148,10 +148,10 @@ public class RendezvousTests : IDisposable
         await using var server = Server(ServerOptions.Default with { IdleTimeout = TimeSpan.FromMilliseconds(400) });
         await using var silent = await Connect(server, DeviceKey.Create(), pingEvery: TimeSpan.FromHours(1));
         await using var pinging = await Connect(server, DeviceKey.Create(), pingEvery: TimeSpan.FromMilliseconds(100));
-        bool dropped = false;
-        silent.Disconnected += () => dropped = true;
 
-        Assert.True(Within(() => dropped), "the silent PC was not dropped");
+        // The client's state, not its Disconnected event: on a busy machine the drop can come before a handler is added.
+        Assert.True(Within(() => !silent.IsConnected), "the silent PC was not dropped");
+        Assert.True(pinging.IsConnected);
         Thread.Sleep(600);
         Assert.Equal(1, server.Online);
     }
