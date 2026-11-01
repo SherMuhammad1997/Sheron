@@ -270,6 +270,8 @@ The one-time password is checked first (it is cheap); the fixed password costs o
 
 Plan step 16 check: unit tests for the password rules, the lock and the secrets format; session tests with two links on this machine: one-time password asks the person (Accept lets in, Deny and no answer refuse), the fixed password lets in at once, three wrong passwords lock even the right one for 30 s (PRD A3, A9). Windows tests for the DPAPI file. Then Sher checks A3 and A9 on his two laptops by IP.
 
+Checked 2 Nov on Sher's two laptops over the iPhone hotspot, connected by IP: Accept let the viewer in, Deny and no answer for 30 s refused it (A3), and three wrong passwords locked out the right one for 30 s (A9). Each laptop kept its device key between runs (same fingerprint every time), so the secrets file works.
+
 ### Session handshake and sealed packets (Plan step 7)
 
 Built only from standard pieces in .NET 8 (`ECDsa`, `ECDiffieHellman`, `HKDF`, `AesGcm`, SHA-256), put together for Sheron. The viewer starts; the remote PC (host) answers. Public keys are sent as the raw 64-byte point (X then Y). Signatures are ECDSA P-256 with SHA-256, 64 bytes (r then s).
