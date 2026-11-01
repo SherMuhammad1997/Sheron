@@ -195,6 +195,9 @@ Before the server exists (Plan steps 11–14), two PCs on the same network conne
 | Mouse wheel | 7 | Delta (2 bytes, signed, 120 per notch), horizontal (1) or vertical (0), X, Y |
 | Key | 8 | Scan code (2 bytes), extended (1) or not (0), down (1) or up (0) |
 | Release all | 9 | Nothing: the remote PC lets go of every key and button the viewer holds |
+| Keyframe request | 10 | Nothing: the remote PC encodes its next frame as a keyframe (IDR), at once even if its screen is still |
+
+**After a lost frame** (added 1 Nov, Plan step 9 test: on the iPhone hotspot, lost frames left smeared, broken pictures, which on a still screen stayed for minutes): the viewer sees a gap in the frame numbers, stops decoding, keeps showing the last clean picture, and sends a keyframe request; again every 300 ms until a keyframe arrives. The remote PC asks its encoder for an IDR (oneVPL: `mfxEncodeCtrl.FrameType` = I + reference + IDR; Media Foundation: `CODECAPI_AVEncVideoForceKeyFrame`) and, if its screen is still, encodes the last captured image again so the keyframe goes out within about 100 ms. This is the "new keyframe only when the viewer asks after loss" of the video path, brought forward from Plan step 10.
 
 The viewer holds frames that come before the video format (at most 60) and decodes them once it is known.
 

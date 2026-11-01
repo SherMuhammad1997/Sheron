@@ -30,6 +30,7 @@ internal static class CodecApi
     private static readonly Guid GopSize = new("95f31b26-95a4-41aa-9303-246a7fc6eef1");
     private static readonly Guid ScenarioInfo = new("b28a6e64-3ff9-446a-8a4b-0d7a53413236");
     private static readonly Guid QualityVsSpeed = new("98332df8-03cd-476b-89fa-3f9e442dec9f");
+    private static readonly Guid ForceKeyFrameApi = new("398c1b98-8353-475a-9ef2-8f265d260345");   // CODECAPI_AVEncVideoForceKeyFrame
 
     /// <summary>eAVEncCommonRateControlMode_CBR.</summary>
     private const uint ConstantBitrate = 0;
@@ -67,6 +68,23 @@ internal static class CodecApi
                 applied.Add(Set(codec, ScenarioInfo, options.Scenario, name));
             }
             return applied.Count > 0 ? applied : ["encoder defaults"];
+        }
+        finally
+        {
+            Marshal.ReleaseComObject(unknown);
+        }
+    }
+
+    /// <summary>Makes the encoder's next frame a keyframe. Call on the thread that calls ProcessInput, just before it.</summary>
+    public static bool ForceKeyFrame(IMFTransform transform)
+    {
+        object unknown = Marshal.GetObjectForIUnknown(transform.NativePointer);
+        try
+        {
+            if (unknown is not ICodecAPI codec) return false;
+            var api = ForceKeyFrameApi;
+            object one = 1u;
+            return codec.SetValue(ref api, ref one) >= 0;
         }
         finally
         {

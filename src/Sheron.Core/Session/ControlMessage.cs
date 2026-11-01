@@ -17,6 +17,9 @@ public enum ControlType : byte
     MouseWheel = 7,
     Key = 8,
     ReleaseAll = 9,
+
+    /// <summary>Viewer → remote PC: send a keyframe now (TRD › Connect by IP › After a lost frame).</summary>
+    KeyFrameRequest = 10,
 }
 
 /// <summary>Control messages that go over the reliable channel: building them, and reading them back with checks.</summary>
@@ -31,6 +34,8 @@ public static class ControlMessage
         message.Length > 0 && Enum.IsDefined((ControlType)message[0]) ? (ControlType)message[0] : null;
 
     public static byte[] Ping() => [(byte)ControlType.Ping];
+
+    public static byte[] KeyFrameRequest() => [(byte)ControlType.KeyFrameRequest];
 
     public static byte[] VideoFormat(int width, int height)
     {

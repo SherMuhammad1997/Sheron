@@ -56,7 +56,11 @@ internal sealed class HostTestForm : DevForm
                 _input.ReleaseAll();
                 OnUiThread(StopSharing);
             };
-            _link.ControlReceived += message => _input.Apply(message);
+            _link.ControlReceived += message =>
+            {
+                if (ControlMessage.TypeOf(message) == ControlType.KeyFrameRequest) Volatile.Read(ref _capture)?.RequestKeyFrame();
+                else _input.Apply(message);
+            };
         }
         catch (SocketException error)
         {

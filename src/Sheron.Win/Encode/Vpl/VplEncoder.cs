@@ -37,6 +37,7 @@ internal sealed unsafe class VplEncoder : IVideoEncoder
     private readonly Dictionary<IntPtr, ID3D11Texture2D> _encoderTextures = [];
     private IntPtr _memoryInterface;
     private bool _encoderStarted;
+    private volatile bool _keyFrameWanted;
     private string _importMode = "";
 
     private VplEncoder(ID3D11Device device, ID3D11DeviceContext context, uint adapterIndex, VideoSettings settings, VplInput input)
@@ -123,6 +124,8 @@ internal sealed unsafe class VplEncoder : IVideoEncoder
     public int HeldBack { get; private set; }
     public string Details => $"{Name}, {_input}{_importMode}";
 
+    public void RequestKeyFrame() => _keyFrameWanted = true;
+
     public IReadOnlyList<EncodedFrame> Encode(ID3D11Texture2D nv12, TimeSpan at)
     {
         IntPtr surface = _input == VplInput.Import ? ImportSurface(nv12) : CopyToEncoderSurface(nv12);
@@ -132,9 +135,14 @@ internal sealed unsafe class VplEncoder : IVideoEncoder
             _bitstream->DataOffset = 0;
             _bitstream->DataLength = 0;
 
+            // A keyframe on request: this frame as an IDR (the control lives until SyncOperation below has returned).
+            var control = new EncodeCtrl { FrameType = FrameTypeI | FrameTypeRef | FrameTypeIdr };
+            IntPtr controlPointer = _keyFrameWanted ? (IntPtr)(&control) : IntPtr.Zero;
+            _keyFrameWanted = false;
+
             int status;
             IntPtr syncPoint;
-            while ((status = MFXVideoENCODE_EncodeFrameAsync(_session, IntPtr.Zero, surface, _bitstream, out syncPoint)) == WarnDeviceBusy)
+            while ((status = MFXVideoENCODE_EncodeFrameAsync(_session, controlPointer, surface, _bitstream, out syncPoint)) == WarnDeviceBusy)
                 Thread.Sleep(1);
             if (status == ErrMoreData)
             {

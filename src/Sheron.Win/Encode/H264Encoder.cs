@@ -83,6 +83,7 @@ internal sealed class H264Encoder : IVideoEncoder
     private readonly CancellationTokenSource _stopping = new();
     private readonly Queue<string> _eventLog = new();
     private volatile string? _workerError;
+    private volatile bool _keyFrameWanted;
 
     /// <summary>Takes ownership of <paramref name="activate"/>.</summary>
     public H264Encoder(IMFActivate activate, string name, EncoderKind kind, ID3D11Device device,
@@ -223,6 +224,7 @@ internal sealed class H264Encoder : IVideoEncoder
         else
         {
             long inputAt = Stopwatch.GetTimestamp();
+            ForceKeyFrameIfWanted();
             using (sample) _transform.ProcessInput(_inputStreamId, sample, 0);
             while (ReadOutput(frames, Stopwatch.GetElapsedTime(inputAt).TotalMilliseconds)) { }
         }
@@ -269,6 +271,7 @@ internal sealed class H264Encoder : IVideoEncoder
                             return;
                         }
                         long inputAt = Stopwatch.GetTimestamp();
+                        ForceKeyFrameIfWanted();
                         using (sample) _transform.ProcessInput(_inputStreamId, sample, 0);
                         lastInputAt = inputAt;
                         break;
@@ -289,6 +292,16 @@ internal sealed class H264Encoder : IVideoEncoder
         {
             // Shut down while waiting: the normal way out.
         }
+    }
+
+    public void RequestKeyFrame() => _keyFrameWanted = true;
+
+    /// <summary>On the thread that owns the encoder, just before it takes the next frame.</summary>
+    private void ForceKeyFrameIfWanted()
+    {
+        if (!_keyFrameWanted) return;
+        _keyFrameWanted = false;
+        CodecApi.ForceKeyFrame(_transform);
     }
 
     private void Fail(string reason)

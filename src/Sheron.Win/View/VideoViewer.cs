@@ -119,6 +119,13 @@ internal sealed class VideoViewer : ICaptureSink, IDisposable
     public void OnPointer(PointerPosition? position, PointerShape? shape) => Post(new PointerItem(position, shape));
 
     /// <summary>
+    /// A frame before the next one was lost: frames after it would be drawn wrong, so nothing is decoded until a
+    /// keyframe comes, and the last clean picture stays (TRD › Connect by IP › After a lost frame). Call before handing
+    /// on the frame after the gap.
+    /// </summary>
+    public void WaitForKeyFrame() => Post(KeyFrameWait.Instance);
+
+    /// <summary>
     /// Whether to draw the remote pointer on the picture. Off while the viewer's mouse is over the picture during
     /// remote control: the viewer's own pointer, in the remote shape, shows it then. Any thread.
     /// </summary>
@@ -162,6 +169,9 @@ internal sealed class VideoViewer : ICaptureSink, IDisposable
                                 break;
                             case PointerItem pointer:
                                 redraw |= SetPointer(pointer);
+                                break;
+                            case KeyFrameWait:
+                                _waitingForKeyFrame = true;
                                 break;
                         }
                     }
@@ -209,6 +219,7 @@ internal sealed class VideoViewer : ICaptureSink, IDisposable
         int width, height;
         lock (_lock) (width, height) = (_windowWidth, _windowHeight);
         _renderer = new VideoRenderer(_device, _context, _window, width, height);
+        _renderer.Clear();
         SetStatus("Waiting for the first keyframe");
     }
 
@@ -285,6 +296,7 @@ internal sealed class VideoViewer : ICaptureSink, IDisposable
         lock (_lock) (width, height) = (_windowWidth, _windowHeight);
         if (_renderer is null || width <= 0 || height <= 0 || (width == _renderer.Width && height == _renderer.Height)) return false;
         _renderer.Resize(width, height);
+        if (_frame is null) _renderer.Clear();
         return _frame is not null;
     }
 
@@ -354,5 +366,11 @@ internal sealed class VideoViewer : ICaptureSink, IDisposable
     private sealed class Wake
     {
         public static readonly Wake Instance = new();
+    }
+
+    /// <summary>A frame was lost: decode nothing until the next keyframe, and keep the last clean picture.</summary>
+    private sealed class KeyFrameWait
+    {
+        public static readonly KeyFrameWait Instance = new();
     }
 }

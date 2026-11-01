@@ -42,6 +42,7 @@ internal sealed class CaptureLoop : IDisposable
     private readonly EncodeStats _encodeStats = new();
     private readonly object _lock = new();
     private volatile bool _stopping;
+    private volatile bool _keyFrameWanted;
 
     // Used by the capture thread only.
     private VideoSettings? _settings;
@@ -77,6 +78,9 @@ internal sealed class CaptureLoop : IDisposable
         _thread.SetApartmentState(ApartmentState.MTA);
         _thread.Start();
     }
+
+    /// <summary>The next frame goes out as a keyframe, within about 100 ms even on a still screen. Any thread.</summary>
+    public void RequestKeyFrame() => _keyFrameWanted = true;
 
     public CaptureLoopSnapshot Snapshot()
     {
@@ -131,7 +135,15 @@ internal sealed class CaptureLoop : IDisposable
                     continue;
                 }
                 Record(result, duplicator);
+                // A keyframe the viewer asked for goes out now, made from the last image if the screen is still.
+                bool keyFrame = _keyFrameWanted;
+                if (keyFrame)
+                {
+                    _keyFrameWanted = false;
+                    _encoder?.RequestKeyFrame();
+                }
                 if (result.Status == CaptureStatus.NewFrame) EncodeLatest(duplicator, result.CapturedAt);
+                else if (keyFrame) EncodeLatest(duplicator, Stopwatch.GetTimestamp());
             }
         }
         finally

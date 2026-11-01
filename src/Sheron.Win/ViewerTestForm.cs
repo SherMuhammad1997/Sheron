@@ -34,6 +34,12 @@ internal sealed class ViewerTestForm : DevForm
     private (TimeSpan At, int Frames, long Bytes) _last;
     private double _framesPerSecond;
     private double _megabitsPerSecond;
+    // Lost frames, on the link's thread under _formatLock (TRD › Connect by IP › After a lost frame).
+    private static readonly TimeSpan AskAgainAfter = TimeSpan.FromMilliseconds(300);
+    private uint? _lastFrameNumber;
+    private bool _waitingForKeyFrame;
+    private long _askedAt;
+    private int _keyFramesAsked;
     // Remote control, on the UI thread.
     private AbsolutePoint? _lastMove;
     private RemoteCursor? _cursor;
@@ -131,11 +137,31 @@ internal sealed class ViewerTestForm : DevForm
         _cursor = cursor;
     }
 
-    /// <summary>On the link's thread. Frames wait until the video format is known; from a keyframe on, at most 60.</summary>
+    /// <summary>
+    /// On the link's thread. A gap in the frame numbers means a lost frame: the viewer keeps the last clean picture and
+    /// asks for a keyframe until one comes. Frames wait until the video format is known; from a keyframe on, at most 60.
+    /// </summary>
     private void OnFrame(AssembledFrame frame)
     {
         lock (_formatLock)
         {
+            bool gap = _lastFrameNumber is { } last && frame.Number != unchecked(last + 1);
+            _lastFrameNumber = frame.Number;
+            if (frame.KeyFrame)
+            {
+                _waitingForKeyFrame = false;
+            }
+            else if (gap && !_waitingForKeyFrame)
+            {
+                _waitingForKeyFrame = true;
+                _viewer?.WaitForKeyFrame();
+                AskForKeyFrame();
+            }
+            else if (_waitingForKeyFrame && Stopwatch.GetElapsedTime(_askedAt) >= AskAgainAfter)
+            {
+                AskForKeyFrame();
+            }
+
             if (_format is not { } format)
             {
                 if (frame.KeyFrame) _early.Clear();
@@ -144,6 +170,13 @@ internal sealed class ViewerTestForm : DevForm
             }
             Show(frame, format);
         }
+    }
+
+    private void AskForKeyFrame()
+    {
+        _askedAt = Stopwatch.GetTimestamp();
+        _keyFramesAsked++;
+        _link?.SendControl(ControlMessage.KeyFrameRequest());
     }
 
     /// <summary>On the link's thread.</summary>
@@ -219,7 +252,9 @@ internal sealed class ViewerTestForm : DevForm
         var t = v.Latency;
         yield return ("Frames /s", $"received {_framesPerSecond:0} · shown {t.FramesPerSecond}", null);
         yield return ("Arrived → shown", t.FramesPerSecond > 0 ? $"avg {t.AverageMs:0.0} · max {t.MaxMs:0.0} ms" : "–", null);
-        yield return ("Lost frames", $"{l.LostFrames} · shards rebuilt {l.RebuiltShards} · refused {l.Refused}", l.LostFrames > 0 ? Bad : null);
+        int asked;
+        lock (_formatLock) asked = _keyFramesAsked;
+        yield return ("Lost frames", $"{l.LostFrames} · keyframes asked {asked} · shards rebuilt {l.RebuiltShards}", l.LostFrames > 0 ? Bad : null);
         yield return ("Data", $"{_megabitsPerSecond:0.0} Mbit/s", null);
         yield return ("Round trip", l.RoundTrip is { } rtt ? $"{rtt.TotalMilliseconds:0.0} ms" : "–", null);
         yield return ("Sheron CPU", $"{CpuPercent:0.0} % of this PC (last 3 s)", null);

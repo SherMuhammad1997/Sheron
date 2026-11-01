@@ -21,6 +21,9 @@ internal interface IVideoEncoder : IDisposable
     /// <summary>Frames the encoder kept instead of answering at once; above 0 means low latency is not working.</summary>
     int HeldBack { get; }
 
+    /// <summary>Makes the next frame a keyframe (IDR): the viewer lost a frame (TRD › Connect by IP › After a lost frame).</summary>
+    void RequestKeyFrame();
+
     /// <summary>
     /// Encodes one NV12 frame and returns what the encoder gave back: normally exactly this frame. An empty list
     /// means the encoder kept the frame (counted in <see cref="HeldBack"/>).

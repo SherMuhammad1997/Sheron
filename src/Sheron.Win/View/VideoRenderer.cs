@@ -79,6 +79,15 @@ internal sealed class VideoRenderer : IDisposable
     /// <summary>Where the picture went in the window last time (inside the background bars).</summary>
     public ScreenRect Picture { get; private set; }
 
+    /// <summary>Fills the window with the background colour: before the first frame, instead of whatever was there.</summary>
+    public void Clear()
+    {
+        using var backBuffer = _swapChain.GetBuffer<ID3D11Texture2D>(0);
+        using var target = _device.CreateRenderTargetView(backBuffer);
+        _context.ClearRenderTargetView(target, new Vortice.Mathematics.Color4(Background.Rgba.R, Background.Rgba.G, Background.Rgba.B, 1f));
+        _swapChain.Present(0, PresentFlags.None);
+    }
+
     public void Resize(int width, int height)
     {
         width = Math.Max(1, width);

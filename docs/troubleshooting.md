@@ -14,6 +14,12 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-11-01 — Smeared, broken picture after lost frames on the hotspot  (Plan step 9)
+Symptom:     Viewing the second laptop over the iPhone hotspot: smears and broken text in the picture, "Lost frames 9". On a still screen the damage stayed, because nothing new was sent.
+Root cause:  Wi-Fi through the phone loses packets in bursts larger than the repair shards; each later frame builds on the lost one, so the damage lasts until the next keyframe, which came only every 300 frames, and never on a still screen.
+Exact fix:   Keyframe on request (TRD › Connect by IP › After a lost frame): the viewer spots a gap in the frame numbers, decodes nothing until a keyframe and keeps the last clean picture, and sends a keyframe request (control message 10), again every 300 ms until one comes. The remote PC asks its encoder for an IDR (oneVPL `mfxEncodeCtrl.FrameType`, layout checked against the v2.16.0 headers in `vpl-layout.txt`; Media Foundation `CODECAPI_AVEncVideoForceKeyFrame`) and encodes the last image again if its screen is still. Also: the video window is filled with the background colour before the first frame (it was white).
+Files:       `src/Sheron.Core/Session/ControlMessage.cs`, `src/Sheron.Win/Capture/CaptureLoop.cs`, `src/Sheron.Win/Encode/IVideoEncoder.cs`, `src/Sheron.Win/Encode/H264Encoder.cs`, `src/Sheron.Win/Encode/CodecApi.cs`, `src/Sheron.Win/Encode/Vpl/VplApi.cs`, `src/Sheron.Win/Encode/Vpl/VplEncoder.cs`, `src/Sheron.Win/View/VideoViewer.cs`, `src/Sheron.Win/View/VideoRenderer.cs`, `src/Sheron.Win/HostTestForm.cs`, `src/Sheron.Win/ViewerTestForm.cs`, `third_party/libvpl/vpl-layout.c`, `third_party/libvpl/vpl-layout.txt`, `docs/02-TRD.md`
+
 ### 2026-11-01 — Clicks could land one pixel off  (Plan step 9)
 Symptom:     `Each_remote_pixel_comes_back_from_its_absolute_value` failed: pixel 7 of 1920 came back as 8 when the absolute value (0–65535) was turned back into pixels by rounding to the nearest.
 Root cause:  The first mapping aimed at the middle of each remote pixel. That lands right if Windows rounds down, but exactly on the half-way point for many pixels, so rounding to the nearest goes one pixel too far. SendInput documents only the 0–65535 range, not how it rounds.

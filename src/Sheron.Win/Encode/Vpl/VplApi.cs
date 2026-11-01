@@ -36,6 +36,7 @@ internal static unsafe class VplApi
     public const ushort IoPatternInVideoMemory = 0x01;
     public const ushort ProfileAvcMain = 77;
     public const ushort FrameTypeI = 0x0001;
+    public const ushort FrameTypeRef = 0x0040;
     public const ushort FrameTypeIdr = 0x0080;
     public const uint ExtBuffVideoSignalInfo = 0x4E495356;  // MFX_EXTBUFF_VIDEO_SIGNAL_INFO, "VSIN"
     public const int SurfaceTypeD3D11Tex2D = 2;
@@ -108,6 +109,13 @@ internal static unsafe class VplApi
         [FieldOffset(186)] public ushort IoPattern;
         [FieldOffset(192)] public IntPtr ExtParam;
         [FieldOffset(200)] public ushort NumExtParam;
+    }
+
+    /// <summary>mfxEncodeCtrl (56 bytes): per-frame control. Only the frame type is set, to ask for a keyframe.</summary>
+    [StructLayout(LayoutKind.Explicit, Size = 56)]
+    public struct EncodeCtrl
+    {
+        [FieldOffset(32)] public ushort FrameType;
     }
 
     /// <summary>mfxBitstream (72 bytes). Kept in native memory, because the runtime writes to it after the call.</summary>
