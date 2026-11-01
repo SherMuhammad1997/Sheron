@@ -192,6 +192,8 @@ The viewer holds frames that come before the video format (at most 60) and decod
 
 Plan step 8 check: PC 2's screen shows on PC 1 at 60 fps.
 
+Measured 1 Nov on Sher's two laptops, both on an iPhone hotspot (each packet crosses the air twice, laptop → phone → laptop), with `Sheron.exe` (one-file build), PC 2 sharing 1920 × 1080 with testufo running: 61 frames received per second, 9.6 Mbit/s, round trip 10.9 ms, arrival → on screen 12.4 ms average (29.4 longest), viewer CPU 1.5 %, hardware decoder. Keys matched on both screens. 43 frames a second were timed on screen; the rest arrived in bunches and were replaced by the next frame before the screen refreshed. 14 frames were lost over about a minute (8 data shards rebuilt): losses came in bursts larger than the repair shards, or a frame finished after a newer one and was dropped. Each lost frame can leave smears until the next keyframe (up to 5 s); Plan step 10 (jitter buffer, keyframe on request) is where this is fixed.
+
 ## Network
 
 | Item | Detail |
