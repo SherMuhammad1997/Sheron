@@ -4,6 +4,8 @@ Simple, fast remote desktop for Windows. Connect to any PC in the world with a 9
 
 Status: Implementation Plan step 8 (connect by IP on the same network, view only) written; being checked on Sher's two PCs.
 
+One-file test build (PRD decision 1 Nov): `dotnet publish src/Sheron.Win -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:EnableCompressionInSingleFile=true -o <folder>`, then rename `Sheron.Win.exe` to `Sheron.exe`. Copy it to any 64-bit Windows 10/11 PC and double-click: "Share this screen" on the PC to be viewed, "View a PC" with its IP address on the other.
+
 Build and test: `dotnet build Sheron.sln` and `dotnet test Sheron.sln` (.NET 8 SDK).
 
 Capture and encoder test window (Plan steps 3–4): `dotnet run --project src/Sheron.Win -- --capture-test` (add `--software-encoder` to skip the hardware encoder)
