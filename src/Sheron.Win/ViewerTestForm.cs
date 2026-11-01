@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using Sheron.Core.Net;
 using Sheron.Core.Security;
+using Sheron.Core.Video;
 using Sheron.Core.Session;
 using LinkState = Sheron.Core.Session.LinkState;
 using Sheron.Win.Encode;
@@ -10,8 +11,9 @@ using Sheron.Win.View;
 namespace Sheron.Win;
 
 /// <summary>
-/// Developer window for Plan step 8 on the viewer: connects to a remote PC on the same network by IP and shows its
-/// screen, view only. Open with <c>Sheron.Win.exe --view &lt;IP&gt;[:port]</c>.
+/// Developer window for Plan steps 8–9 on the viewer: connects to a remote PC on the same network by IP, shows its
+/// screen and sends the mouse and keyboard used over the picture (TRD › Input path). Open with
+/// <c>Sheron.Win.exe --view &lt;IP&gt;[:port]</c>.
 /// </summary>
 internal sealed class ViewerTestForm : DevForm
 {
@@ -32,9 +34,12 @@ internal sealed class ViewerTestForm : DevForm
     private (TimeSpan At, int Frames, long Bytes) _last;
     private double _framesPerSecond;
     private double _megabitsPerSecond;
+    // Remote control, on the UI thread.
+    private AbsolutePoint? _lastMove;
+    private RemoteCursor? _cursor;
 
     public ViewerTestForm(IPEndPoint remote, bool allowHardwareDecoder = true)
-        : base($"viewing {remote} (developer)", $"Viewing {remote} · Plan step 8 · view only, same network",
+        : base($"viewing {remote} (developer)", $"Viewing {remote} · Plan step 9 · click the picture to control, same network",
             new Size(960, 720), headerHeight: 204, rowsPerColumn: 6, withVideo: true)
     {
         _remote = remote;
@@ -50,7 +55,80 @@ internal sealed class ViewerTestForm : DevForm
         _link = Link.Viewer(_key, _remote);
         _link.FrameReceived += OnFrame;
         _link.ControlReceived += OnControl;
+        WireControl(video);
         StartRefresh();
+    }
+
+    /// <summary>Mouse and keys over the picture go to the remote PC (TRD › Input path).</summary>
+    private void WireControl(VideoPanel video)
+    {
+        video.TakesKeyboard = true;
+        video.MouseMove += (_, e) =>
+        {
+            if (RemotePoint(e.Location) is not { } at || at == _lastMove) return;
+            _lastMove = at;
+            Send(InputMessage.Move(at));
+        };
+        video.MouseDown += (_, e) => SendButton(e, down: true);
+        video.MouseUp += (_, e) => SendButton(e, down: false);
+        video.MouseWheel += (_, e) => SendWheel(e.Delta, horizontal: false, e.Location);
+        video.HorizontalWheel += (delta, at) => SendWheel(delta, horizontal: true, at);
+        video.KeyPressed += key => Send(InputMessage.Key(key));
+        // Anything still held is let go when the picture loses the keyboard (Alt+Tab, another window).
+        video.LostFocus += (_, _) => Send(InputMessage.ReleaseAll());
+        // Over the picture the viewer's own pointer, in the remote shape, shows the remote pointer.
+        video.MouseEnter += (_, _) => _viewer?.DrawPointer(false);
+        video.MouseLeave += (_, _) => _viewer?.DrawPointer(true);
+    }
+
+    /// <summary>Where a point in the video window lands on the remote screen; null until the picture size is known.</summary>
+    private AbsolutePoint? RemotePoint(Point at)
+    {
+        (int Width, int Height)? format;
+        lock (_formatLock) format = _format;
+        if (format is not { } f || Video is not { } video) return null;
+        var picture = Letterbox.Fit(f.Width, f.Height, video.ClientSize.Width, video.ClientSize.Height);
+        return ScreenMapping.ToAbsolute(at.X, at.Y, picture, f.Width, f.Height);
+    }
+
+    private void SendButton(MouseEventArgs e, bool down)
+    {
+        MouseButton? button = e.Button switch
+        {
+            MouseButtons.Left => MouseButton.Left,
+            MouseButtons.Right => MouseButton.Right,
+            MouseButtons.Middle => MouseButton.Middle,
+            MouseButtons.XButton1 => MouseButton.Back,
+            MouseButtons.XButton2 => MouseButton.Forward,
+            _ => null,
+        };
+        if (button is { } b && RemotePoint(e.Location) is { } at) Send(InputMessage.Button(new MouseButtonInput(b, down, at)));
+    }
+
+    private void SendWheel(int delta, bool horizontal, Point location)
+    {
+        if (RemotePoint(location) is not { } at) return;
+        Send(InputMessage.Wheel(new MouseWheelInput((short)Math.Clamp(delta, short.MinValue, short.MaxValue), horizontal, at)));
+    }
+
+    private void Send(byte[] message) => _link?.SendControl(message);
+
+    /// <summary>On the UI thread: the viewer's own pointer over the picture takes the remote shape.</summary>
+    private void UseRemoteShape(Core.Capture.PointerShape shape)
+    {
+        if (Video is not { } video) return;
+        RemoteCursor cursor;
+        try
+        {
+            cursor = RemoteCursor.From(shape);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return;   // keep the pointer there is; the drawn pointer still shows the shape
+        }
+        video.Cursor = cursor.Cursor;
+        _cursor?.Dispose();
+        _cursor = cursor;
     }
 
     /// <summary>On the link's thread. Frames wait until the video format is known; from a keyframe on, at most 60.</summary>
@@ -83,6 +161,7 @@ internal sealed class ViewerTestForm : DevForm
                 break;
             case ControlType.PointerShape when ControlMessage.TryReadPointerShape(message, out var shape):
                 _viewer?.OnPointer(null, shape);
+                OnUiThread(() => UseRemoteShape(shape!));
                 break;
             case ControlType.PointerPosition when ControlMessage.TryReadPointerPosition(message, out var position):
                 _viewer?.OnPointer(position, null);
@@ -150,10 +229,13 @@ internal sealed class ViewerTestForm : DevForm
     {
         if (disposing)
         {
-            // The link first: it hands frames to the viewer.
+            // Let go of anything held, then the link: it hands frames to the viewer.
+            _link?.SendControl(InputMessage.ReleaseAll());
             _link?.Dispose();
             _viewer?.Dispose();
             _key.Dispose();
+            if (Video is { } video) video.Cursor = Cursors.Default;
+            _cursor?.Dispose();
         }
         base.Dispose(disposing);
     }

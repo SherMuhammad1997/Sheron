@@ -1,4 +1,5 @@
 using Sheron.Core;
+using Sheron.Core.Session;
 
 namespace Sheron.Win;
 
@@ -134,12 +135,71 @@ internal abstract class DevForm : Form
     }
 }
 
-/// <summary>The child window video is drawn into; Windows Forms paints nothing on it.</summary>
+/// <summary>
+/// The child window video is drawn into; Windows Forms paints nothing on it. With <see cref="TakesKeyboard"/> it takes
+/// the keyboard when clicked and hands every key on as a scan code, Alt and F10 included, instead of acting on it
+/// (TRD › Input path): the keys are the remote PC's.
+/// </summary>
 internal sealed class VideoPanel : Control
 {
+    private const int WM_KEYDOWN = 0x0100;
+    private const int WM_KEYUP = 0x0101;
+    private const int WM_SYSKEYDOWN = 0x0104;
+    private const int WM_SYSKEYUP = 0x0105;
+    private const int WM_MOUSEHWHEEL = 0x020E;
+
     public VideoPanel()
     {
         SetStyle(ControlStyles.Opaque | ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint, true);
         SetStyle(ControlStyles.Selectable, false);
+    }
+
+    /// <summary>A key went down (again, when held) or up.</summary>
+    public event Action<KeyInput>? KeyPressed;
+
+    /// <summary>The horizontal wheel turned: 120 per notch, positive to the right; the point is in client pixels.</summary>
+    public event Action<int, Point>? HorizontalWheel;
+
+    public bool TakesKeyboard
+    {
+        get => GetStyle(ControlStyles.Selectable);
+        set
+        {
+            SetStyle(ControlStyles.Selectable, value);
+            TabStop = value;
+        }
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        if (TakesKeyboard) Focus();
+        base.OnMouseDown(e);
+    }
+
+    /// <summary>Arrows, Tab, Enter and Escape are keys like any other here, not moves between controls.</summary>
+    protected override bool IsInputKey(Keys keyData) => TakesKeyboard || base.IsInputKey(keyData);
+
+    protected override void WndProc(ref Message m)
+    {
+        if (TakesKeyboard && m.Msg is WM_KEYDOWN or WM_KEYUP or WM_SYSKEYDOWN or WM_SYSKEYUP)
+        {
+            // lParam: bits 16–23 the scan code, bit 24 set for an extended key (right Ctrl, arrows, Insert …).
+            long info = m.LParam.ToInt64();
+            ushort scanCode = (ushort)((info >> 16) & 0xFF);
+            bool extended = (info & (1L << 24)) != 0;
+            if (scanCode != 0) KeyPressed?.Invoke(new KeyInput(scanCode, extended, m.Msg is WM_KEYDOWN or WM_SYSKEYDOWN));
+            m.Result = IntPtr.Zero;
+            return;
+        }
+        if (m.Msg == WM_MOUSEHWHEEL)
+        {
+            long wParam = m.WParam.ToInt64(), lParam = m.LParam.ToInt64();
+            int delta = (short)((wParam >> 16) & 0xFFFF);
+            var at = PointToClient(new Point((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF)));
+            HorizontalWheel?.Invoke(delta, at);
+            m.Result = IntPtr.Zero;
+            return;
+        }
+        base.WndProc(ref m);
     }
 }

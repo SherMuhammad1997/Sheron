@@ -14,6 +14,12 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-11-01 — Clicks could land one pixel off  (Plan step 9)
+Symptom:     `Each_remote_pixel_comes_back_from_its_absolute_value` failed: pixel 7 of 1920 came back as 8 when the absolute value (0–65535) was turned back into pixels by rounding to the nearest.
+Root cause:  The first mapping aimed at the middle of each remote pixel. That lands right if Windows rounds down, but exactly on the half-way point for many pixels, so rounding to the nearest goes one pixel too far. SendInput documents only the 0–65535 range, not how it rounds.
+Exact fix:   `ScreenMapping.Absolute` gives the smallest absolute value at or past the pixel's left (top) edge: (65536 × pixel + size − 1) / size. Turned back it is under 0.06 of a pixel past the edge for screens up to 3840 pixels, so both kinds of rounding land on the pixel. The test checks every pixel of 1366, 1920, 2560 and 3840 both ways.
+Files:       `src/Sheron.Core/Session/Input.cs`, `tests/Sheron.Tests/Session/InputTests.cs`
+
 ### 2026-10-26 — Timing test failed while other tests ran  (Plan step 7)
 Symptom:     `Sealing_and_opening_a_frame_takes_well_under_a_millisecond` failed with 1.391 ms per frame; the same work measured alone took 0.13 ms (2.3 µs to seal, 4.1 µs to open a packet).
 Root cause:  xUnit runs test classes side by side; the timing test shared the processor with the 5 % loss simulations.

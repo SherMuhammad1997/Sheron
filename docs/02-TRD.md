@@ -155,12 +155,15 @@ Measured 26 Oct in the cloud session (tests `BadNetworkTests`):
 
 | Item | Detail |
 | --- | --- |
-| Keys | Sent as scan codes, so keyboard layouts work |
-| Mouse | Absolute position scaled to 0–65535, buttons and wheel |
-| Channel | Ordered and reliable, sent ahead of video |
-| Remote side | `SendInput` |
+| Keys | Sent as scan codes, so keyboard layouts work: the key's place on the keyboard travels, and the remote PC's own layout gives the letter. Key repeat travels as repeated key-downs |
+| Mouse | Absolute position scaled to 0–65535 across the remote screen, buttons (left, right, middle, back, forward) and wheel (vertical and horizontal, 120 per notch). A button or wheel message carries the position too, so a click lands where it was made |
+| Channel | Ordered and reliable (control messages over the reliable channel), sent ahead of video |
+| Remote side | `SendInput`: mouse with absolute coordinates on the main monitor (the one Sheron captures), keys with KEYEVENTF_SCANCODE (and KEYEVENTF_EXTENDEDKEY for extended keys) |
+| Stuck keys | The remote PC remembers which keys and buttons the viewer holds down. It lets go of all of them when the viewer sends "release all" (the viewer's window loses the keyboard or closes) and when the session ends or goes quiet, so nothing stays pressed |
+| Viewer keys | The video window takes the keyboard when clicked. Windows keeps Alt+Tab, the Windows key and Ctrl+Alt+Del for the viewer's own PC; they are not sent (Ctrl+Alt+Del: Plan step 17) |
 | Ctrl+Alt+Del | `SendSAS` from the service; the installer sets the Windows policy that allows a software Secure Attention Sequence |
-| Pointer | Remote PC sends the shape when it changes, then positions; the viewer draws it |
+| Pointer | Remote PC sends the shape when it changes, then positions. While the viewer's mouse is over the remote picture, the viewer's own Windows pointer takes the remote shape (built with `CreateIconIndirect`: colour with alpha, monochrome and masked-colour shapes), so it moves with no delay, and the drawn pointer is hidden. Elsewhere the drawn pointer shows where the remote pointer is |
+| Limits until Plan step 17 | `SendInput` from a normal program cannot reach programs running as administrator, the UAC prompt or the lock screen (Windows blocks it). The service in Plan step 17 runs at system level for those |
 
 ## Connect by IP (Plan step 8, developer mode)
 
@@ -168,7 +171,7 @@ Before the server exists (Plan steps 11–14), two PCs on the same network conne
 
 | Item | Rule |
 | --- | --- |
-| Remote PC | `Sheron.Win.exe --host [--port 47920]` opens a window that says the screen can be viewed, shows this PC's IP addresses and key fingerprint, and who is viewing. Sharing lasts only while that window is open; there is no hidden mode |
+| Remote PC | `Sheron.Win.exe --host [--port 47920]` opens a window that says the screen can be viewed and controlled, shows this PC's IP addresses and key fingerprint, who is viewing, and when the viewer last used the mouse or keyboard. Sharing and control last only while that window is open; there is no hidden mode |
 | Viewer | `Sheron.Win.exe --view <IP>[:port]` opens a window with the remote screen and its figures |
 | Start window | Started with no switches, Sheron opens a small start window until the home screen exists (Plan step 15, PRD decision 1 Nov): "Share this screen" opens the remote PC's window; "View a PC" with an IP address typed in opens the viewer. Both choices drawn on the form; the IP box is the one real control |
 | One file | `dotnet publish src/Sheron.Win -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:EnableCompressionInSingleFile=true` makes one `Sheron.exe` that holds .NET, the libraries and libvpl.dll and unpacks them to the user's temp folder when it starts. It is not signed yet (Plan step 20), so Windows SmartScreen asks first ("More info", "Run anyway") |
@@ -187,6 +190,11 @@ Before the server exists (Plan steps 11–14), two PCs on the same network conne
 | Pointer shape | 2 | Kind (1 byte: 1 monochrome, 2 colour, 4 masked colour), width, height, pitch, hot spot X, hot spot Y (2 bytes each), the pixels |
 | Pointer position | 3 | Visible (1 byte), X, Y (4 bytes each, may be negative) |
 | Ping | 4 | Nothing |
+| Mouse move (Plan step 9) | 5 | X, Y (2 bytes each, 0–65535 across the remote screen) |
+| Mouse button | 6 | Button (1 left, 2 right, 3 middle, 4 back, 5 forward), down (1) or up (0), X, Y |
+| Mouse wheel | 7 | Delta (2 bytes, signed, 120 per notch), horizontal (1) or vertical (0), X, Y |
+| Key | 8 | Scan code (2 bytes), extended (1) or not (0), down (1) or up (0) |
+| Release all | 9 | Nothing: the remote PC lets go of every key and button the viewer holds |
 
 The viewer holds frames that come before the video format (at most 60) and decodes them once it is known.
 

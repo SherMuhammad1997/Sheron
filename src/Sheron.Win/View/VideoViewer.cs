@@ -61,6 +61,8 @@ internal sealed class VideoViewer : ICaptureSink, IDisposable
     private FrameTimes? _frame;
     private PointerImage? _pointerImage;
     private PointerPosition _pointer;
+    /// <summary>False while the viewer's own pointer stands in for the remote one (TRD › Input path › Pointer).</summary>
+    private volatile bool _drawPointer = true;
 
     // Shared with the window: read and written under _lock.
     private int _windowWidth;
@@ -115,6 +117,17 @@ internal sealed class VideoViewer : ICaptureSink, IDisposable
         Post(new VideoItem(frame, width, height, capturedAt, encodedAt));
 
     public void OnPointer(PointerPosition? position, PointerShape? shape) => Post(new PointerItem(position, shape));
+
+    /// <summary>
+    /// Whether to draw the remote pointer on the picture. Off while the viewer's mouse is over the picture during
+    /// remote control: the viewer's own pointer, in the remote shape, shows it then. Any thread.
+    /// </summary>
+    public void DrawPointer(bool draw)
+    {
+        if (_drawPointer == draw) return;
+        _drawPointer = draw;
+        Post(new PointerItem(null, null));   // draw the frame again without (or with) the pointer
+    }
 
     private void Post(object item)
     {
@@ -279,7 +292,7 @@ internal sealed class VideoViewer : ICaptureSink, IDisposable
     private void Show(bool newFrame)
     {
         if (_renderer is null || _decoder?.Frame is not { } texture || _frame is not { } frame) return;
-        _renderer.Draw(texture, _decoder.Width, _decoder.Height, _pointerImage, _pointer);
+        _renderer.Draw(texture, _decoder.Width, _decoder.Height, _drawPointer ? _pointerImage : null, _pointer);
         long drawn = Stopwatch.GetTimestamp();
         uint count = _renderer.Present();
         if (newFrame)

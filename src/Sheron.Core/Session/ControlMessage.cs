@@ -10,6 +10,13 @@ public enum ControlType : byte
     PointerShape = 2,
     PointerPosition = 3,
     Ping = 4,
+
+    // Remote control, viewer → remote PC (Plan step 9, TRD › Input path); built by InputMessage.
+    MouseMove = 5,
+    MouseButton = 6,
+    MouseWheel = 7,
+    Key = 8,
+    ReleaseAll = 9,
 }
 
 /// <summary>Control messages that go over the reliable channel: building them, and reading them back with checks.</summary>

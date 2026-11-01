@@ -7,12 +7,14 @@ using Sheron.Core.Session;
 using LinkState = Sheron.Core.Session.LinkState;
 using Sheron.Win.Capture;
 using Sheron.Win.Encode;
+using Sheron.Win.Input;
 
 namespace Sheron.Win;
 
 /// <summary>
-/// Developer window for Plan step 8 on the remote PC: lets one viewer on the same network see this screen, and shows
-/// who is viewing. Sharing lasts only while this window is open; there is no hidden mode (CLAUDE.md › Hard rules).
+/// Developer window for Plan steps 8–9 on the remote PC: lets one viewer on the same network see this screen and use
+/// its mouse and keyboard, and shows who is viewing and when they last used the input. Sharing and control last
+/// only while this window is open; there is no hidden mode (CLAUDE.md › Hard rules).
 /// Open with <c>Sheron.Win.exe --host [--port 47920]</c>.
 /// </summary>
 internal sealed class HostTestForm : DevForm
@@ -22,6 +24,7 @@ internal sealed class HostTestForm : DevForm
     private readonly DeviceKey _key = DeviceKey.Create();
     private readonly string _addresses = LocalAddresses();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private readonly InputInjector _input = new();
     private Link? _link;
     private string? _linkError;
     private CaptureLoop? _capture;
@@ -32,7 +35,7 @@ internal sealed class HostTestForm : DevForm
     private double _megabitsPerSecond;
 
     public HostTestForm(int port, bool allowHardwareEncoder = true)
-        : base("sharing this screen (developer)", "Sharing this screen · Plan step 8 · close this window to stop sharing",
+        : base("sharing this screen (developer)", "Sharing this screen · the viewer can use this PC's mouse and keyboard · close this window to stop",
             new Size(960, 260), headerHeight: 260, rowsPerColumn: 6, withVideo: false)
     {
         _port = port;
@@ -47,7 +50,13 @@ internal sealed class HostTestForm : DevForm
             _link = Link.Host(_key, _port);
             // Capture runs only while a viewer is connected, so each viewer's first frame is a keyframe.
             _link.Connected += () => OnUiThread(StartSharing);
-            _link.Disconnected += () => OnUiThread(StopSharing);
+            // Nothing the viewer held stays pressed once it is gone (TRD › Input path › Stuck keys).
+            _link.Disconnected += () =>
+            {
+                _input.ReleaseAll();
+                OnUiThread(StopSharing);
+            };
+            _link.ControlReceived += message => _input.Apply(message);
         }
         catch (SocketException error)
         {
@@ -105,7 +114,11 @@ internal sealed class HostTestForm : DevForm
         yield return ("Capture", c is null ? "–" : $"{c.Stats.FramesPerSecond} fps · {c.Stats.AverageFrameMs:0.00} ms", null);
         yield return ("Sent", viewed ? $"{_framesPerSecond:0} frames/s · {_megabitsPerSecond:0.0} Mbit/s" : "–", null);
         yield return ("Round trip", l?.RoundTrip is { } rtt && viewed ? $"{rtt.TotalMilliseconds:0} ms" : "–", null);
-        yield return ("Resends", l is null ? "–" : $"{l.Resends} · refused packets {l.Refused}", null);
+        long lastInput = _input.LastInputAt;
+        yield return ("Control", !viewed ? "–"
+            : lastInput == 0 ? "not used yet"
+            : $"last input {Stopwatch.GetElapsedTime(lastInput).TotalSeconds:0.0} s ago"
+                + (_input.Blocked > 0 ? $" · {_input.Blocked} blocked by Windows" : ""), viewed && lastInput != 0 ? Accent : null);
         yield return ("Sheron CPU", $"{CpuPercent:0.0} % of this PC (last 3 s)", null);
     }
 
@@ -127,6 +140,7 @@ internal sealed class HostTestForm : DevForm
         {
             StopSharing();
             _link?.Dispose();
+            _input.ReleaseAll();
             _key.Dispose();
         }
         base.Dispose(disposing);
