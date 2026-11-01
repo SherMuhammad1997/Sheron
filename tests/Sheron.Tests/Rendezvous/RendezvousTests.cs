@@ -63,7 +63,8 @@ public class RendezvousTests : IDisposable
         Assert.Equal(b.Id, peer.Id);
         Assert.Equal(keyB.PublicKey, peer.PublicKey);
         Assert.Contains(peer.Addresses, x => x.Kind == AddressKind.Lan && x.EndPoint.Equals(new IPEndPoint(IPAddress.Parse("192.168.1.20"), 50002)));
-        Assert.Contains(peer.Addresses, x => x.Kind == AddressKind.Public && x.EndPoint.Address.Equals(IPAddress.Loopback));
+        // The public UDP address comes only from the address check (Plan step 12; ConnectionTests).
+        Assert.DoesNotContain(peer.Addresses, x => x.Kind == AddressKind.Public);
 
         // The other PC hears about the asker, with the same connect ID.
         Assert.True(Within(() => !incoming.IsEmpty));

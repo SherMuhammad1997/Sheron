@@ -4,6 +4,8 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Threading.Channels;
+using Sheron.Core.Net;
 using Sheron.Core.Rendezvous;
 using Sheron.Core.Security;
 
@@ -14,14 +16,17 @@ internal sealed record ServerOptions(
     TimeSpan IdleTimeout,
     TimeSpan RegisterTimeout,
     int FindsPerMinute,
-    int ConnectionsPerMinutePerIp)
+    int ConnectionsPerMinutePerIp,
+    TimeSpan RelayIdle)
 {
-    public static readonly ServerOptions Default = new(TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(10), 20, 30);
+    public static readonly ServerOptions Default = new(TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(10), 20, 30, TimeSpan.FromSeconds(60));
 }
 
 /// <summary>
-/// The rendezvous server (Plan step 11): PCs connect over TLS, register with their device key, get their 9-digit ID,
-/// and find each other by ID. It only introduces PCs; it never sees session keys or screens.
+/// The rendezvous server (Plan steps 11–12): PCs connect over TLS, register with their device key, get their 9-digit
+/// ID, and find each other by ID. On UDP it tells each PC its public address and relays sessions that cannot go
+/// direct, bridging to the TCP relay for PCs whose UDP is blocked. It only introduces and forwards; it never sees
+/// session keys or screens.
 /// </summary>
 internal sealed class RendezvousServer : IAsyncDisposable
 {
@@ -32,15 +37,26 @@ internal sealed class RendezvousServer : IAsyncDisposable
     private readonly CancellationTokenSource _stopping = new();
     private readonly ConcurrentDictionary<uint, Connection> _online = new();
     private readonly ConcurrentDictionary<IPAddress, Queue<DateTimeOffset>> _connectionsByIp = new();
+    private readonly IPacketTransport? _udp;
+    private readonly ConcurrentDictionary<string, Connection> _byToken = new();
+    private readonly ConcurrentDictionary<string, Relay> _relays = new();
+    private readonly ConcurrentDictionary<IPEndPoint, (Relay Relay, Role Role)> _relayByEndpoint = new();
     private Task? _accepting;
+    private Thread? _udpThread;
 
-    public RendezvousServer(IPEndPoint bindTo, X509Certificate2 certificate, IdRegistry registry, ServerOptions? options = null)
+    /// <param name="udp">The UDP side (address check and relay, Plan step 12); null for none.</param>
+    public RendezvousServer(IPEndPoint bindTo, X509Certificate2 certificate, IdRegistry registry, ServerOptions? options = null,
+        IPacketTransport? udp = null)
     {
         _listener = new TcpListener(bindTo);
         _certificate = certificate;
         _registry = registry;
         _options = options ?? ServerOptions.Default;
+        _udp = udp;
     }
+
+    /// <summary>Relays waiting for joins or carrying sessions.</summary>
+    public int Relays => _relays.Count;
 
     public IPEndPoint LocalEndPoint => (IPEndPoint)_listener.LocalEndpoint;
 
@@ -53,6 +69,9 @@ internal sealed class RendezvousServer : IAsyncDisposable
     {
         _listener.Start();
         _accepting = AcceptLoop();
+        if (_udp is null) return;
+        _udpThread = new Thread(UdpLoop) { IsBackground = true, Name = "Sheron server UDP" };
+        _udpThread.Start();
     }
 
     private async Task AcceptLoop()
@@ -107,6 +126,8 @@ internal sealed class RendezvousServer : IAsyncDisposable
             {
                 if (connection.Id != 0 && _online.TryRemove(new KeyValuePair<uint, Connection>(connection.Id, connection)))
                     Log?.Invoke($"{RendezvousWire.Show(connection.Id)} offline");
+                _byToken.TryRemove(Convert.ToHexString(connection.Token), out _);
+                foreach (var relay in _relays.Values.Where(r => r.Viewer == connection || r.Host == connection).ToList()) EndRelay(relay);
                 connection.Dispose();
             }
             else
@@ -128,14 +149,15 @@ internal sealed class RendezvousServer : IAsyncDisposable
 
         connection.PublicKey = key;
         connection.Id = _registry.IdFor(connection.PublicKey, DateTimeOffset.UtcNow);
-        // Addresses as the PC gave them, plus the one the server sees, with the PC's UDP port (Plan step 12 checks it).
-        int udpPort = lan.Select(a => a.EndPoint.Port).FirstOrDefault();
-        connection.Addresses = [.. lan.Where(a => a.Kind == AddressKind.Lan), new PeerAddress(AddressKind.Public, new IPEndPoint(connection.Ip, udpPort))];
+        // LAN addresses as the PC gave them; its public UDP address comes from the address check (Plan step 12).
+        connection.Lan = [.. lan.Where(a => a.Kind == AddressKind.Lan)];
+        _byToken[Convert.ToHexString(connection.Token)] = connection;
 
         // One connection per device: a new one replaces the old.
         if (_online.TryGetValue(connection.Id, out var earlier)) earlier.Dispose();
         _online[connection.Id] = connection;
-        await connection.SendAsync(RendezvousType.Registered, RendezvousWire.Id(connection.Id), cancel).ConfigureAwait(false);
+        await connection.SendAsync(RendezvousType.Registered, (byte[])[.. RendezvousWire.Id(connection.Id), .. connection.Token], cancel)
+            .ConfigureAwait(false);
         Log?.Invoke($"{RendezvousWire.Show(connection.Id)} online from {connection.Ip}");
         return true;
     }
@@ -175,6 +197,16 @@ internal sealed class RendezvousServer : IAsyncDisposable
                 case { Type: RendezvousType.Find, Body: var body } when body.Length == 4 && RendezvousWire.TryReadId(body, out uint id):
                     await Find(connection, id).ConfigureAwait(false);
                     break;
+                case { Type: RendezvousType.RelayRequest, Body: var body } when body.Length == RendezvousWire.ConnectIdSize:
+                    await AskForRelay(connection, body).ConfigureAwait(false);
+                    break;
+                case { Type: RendezvousType.RelayJoin, Body: var body } when body.Length == RendezvousWire.ConnectIdSize + 1:
+                    JoinOverTcp(connection, body);
+                    break;
+                case { Type: RendezvousType.RelaySend, Body: var packet }:
+                    // After the relay ends (the other PC left) its last packets are dropped, not an error.
+                    if (connection.TcpRelay is { } relay) Forward(relay, relay.Viewer == connection ? Role.Viewer : Role.Host, packet);
+                    break;
                 default:
                     return;
             }
@@ -201,6 +233,8 @@ internal sealed class RendezvousServer : IAsyncDisposable
         }
 
         byte[] connectId = RandomNumberGenerator.GetBytes(RendezvousWire.ConnectIdSize);
+        PruneRelays();
+        _relays[Convert.ToHexString(connectId)] = new Relay(connectId, asker, target);
         try
         {
             await target.SendAsync(RendezvousType.Incoming,
@@ -214,6 +248,120 @@ internal sealed class RendezvousServer : IAsyncDisposable
         await asker.SendAsync(RendezvousType.Found,
             RendezvousWire.Peer(new PeerInfo(connectId, target.Id, target.PublicKey, target.Addresses)), _stopping.Token).ConfigureAwait(false);
         Log?.Invoke($"{RendezvousWire.Show(asker.Id)} found {RendezvousWire.Show(target.Id)}");
+    }
+
+    /// <summary>The viewer found no direct path: tell the remote PC to join the relay too.</summary>
+    private async Task AskForRelay(Connection viewer, byte[] connectId)
+    {
+        if (!_relays.TryGetValue(Convert.ToHexString(connectId), out var relay) || relay.Viewer != viewer) return;
+        relay.Touch();
+        await relay.Host.SendAsync(RendezvousType.RelayAsked, connectId, _stopping.Token).ConfigureAwait(false);
+    }
+
+    /// <summary>A PC joins over its TLS connection: only one of the two PCs the connect ID was made for, in its own role.</summary>
+    private void JoinOverTcp(Connection connection, byte[] body)
+    {
+        var role = (Role)body[^1];
+        if (!Enum.IsDefined(role) || !_relays.TryGetValue(Convert.ToHexString(body.AsSpan(0, RendezvousWire.ConnectIdSize)), out var relay)) return;
+        if (connection != (role == Role.Viewer ? relay.Viewer : relay.Host)) return;
+        // A PC that tried UDP first and now joins over TLS gets its packets over TLS from now on.
+        if (relay.UdpOf(role) is { } old) _relayByEndpoint.TryRemove(old, out _);
+        connection.TcpRelay = relay;
+        relay.JoinTcp(role);
+        Ready(relay);
+    }
+
+    /// <summary>UDP: address checks, relay joins, and packets to forward.</summary>
+    private void UdpLoop()
+    {
+        var buffer = new byte[2048];
+        var lastPrune = DateTimeOffset.UtcNow;
+        while (!_stopping.IsCancellationRequested)
+        {
+            if (DateTimeOffset.UtcNow - lastPrune > TimeSpan.FromSeconds(10))
+            {
+                PruneRelays();
+                lastPrune = DateTimeOffset.UtcNow;
+            }
+            int length;
+            IPEndPoint from;
+            try
+            {
+                if (!_udp!.TryReceive(buffer, TimeSpan.FromMilliseconds(50), out length, out from)) continue;
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+            var packet = buffer.AsSpan(0, length);
+            if (packet.Length == 0) continue;
+            if (RendezvousWire.TryReadUdp(packet, UdpMessage.AddressCheck, false, out var token, out _))
+            {
+                if (!_byToken.TryGetValue(Convert.ToHexString(token), out var connection)) continue;
+                connection.PublicUdp = from;
+                _udp.Send(RendezvousWire.AddressSeen(from), from);
+            }
+            else if (RendezvousWire.TryReadUdp(packet, UdpMessage.RelayJoin, true, out var connectId, out var role))
+            {
+                if (!_relays.TryGetValue(Convert.ToHexString(connectId), out var relay)) continue;
+                if (relay.UdpOf(role) is { } old && !old.Equals(from)) _relayByEndpoint.TryRemove(old, out _);
+                relay.JoinUdp(role, from);
+                _relayByEndpoint[from] = (relay, role);
+                Ready(relay);
+            }
+            else if (_relayByEndpoint.TryGetValue(from, out var joined))
+            {
+                Forward(joined.Relay, joined.Role, packet.ToArray());
+            }
+        }
+    }
+
+    /// <summary>Once both PCs have joined: Relay ready to each, on the way each joined (again for every repeated UDP join).</summary>
+    private void Ready(Relay relay)
+    {
+        if (!relay.Joined(Role.Viewer) || !relay.Joined(Role.Host)) return;
+        foreach (var role in new[] { Role.Viewer, Role.Host })
+        {
+            if (relay.UdpOf(role) is { } endpoint)
+                _udp?.Send(RendezvousWire.Udp(UdpMessage.RelayReady, relay.ConnectId), endpoint);
+            else if (!relay.ReadySentOverTcp(role))
+                _ = Send(role == Role.Viewer ? relay.Viewer : relay.Host, RendezvousType.RelayReady, relay.ConnectId);
+        }
+    }
+
+    /// <summary>One packet from one side to the other, over whatever the other side joined with.</summary>
+    private void Forward(Relay relay, Role from, byte[] packet)
+    {
+        if (!relay.Joined(Role.Viewer) || !relay.Joined(Role.Host) || packet.Length > Core.Net.PacketLimits.MaxDatagram) return;
+        relay.Touch();
+        var to = from == Role.Viewer ? Role.Host : Role.Viewer;
+        if (relay.UdpOf(to) is { } endpoint) _udp?.Send(packet, endpoint);
+        else (to == Role.Viewer ? relay.Viewer : relay.Host).Deliver(packet, _stopping.Token);
+    }
+
+    private async Task Send(Connection connection, RendezvousType type, byte[] body)
+    {
+        try
+        {
+            await connection.SendAsync(type, body, _stopping.Token).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is IOException or ObjectDisposedException or OperationCanceledException)
+        {
+        }
+    }
+
+    private void PruneRelays()
+    {
+        foreach (var relay in _relays.Values.Where(r => r.IdleFor > _options.RelayIdle).ToList()) EndRelay(relay);
+    }
+
+    private void EndRelay(Relay relay)
+    {
+        _relays.TryRemove(Convert.ToHexString(relay.ConnectId), out _);
+        foreach (var role in new[] { Role.Viewer, Role.Host })
+            if (relay.UdpOf(role) is { } endpoint) _relayByEndpoint.TryRemove(endpoint, out _);
+        if (relay.Viewer.TcpRelay == relay) relay.Viewer.TcpRelay = null;
+        if (relay.Host.TcpRelay == relay) relay.Host.TcpRelay = null;
     }
 
     private Task NotFound(Connection asker, uint id, NotFoundReason reason) =>
@@ -238,6 +386,7 @@ internal sealed class RendezvousServer : IAsyncDisposable
         _stopping.Cancel();
         _listener.Stop();
         if (_accepting is not null) await _accepting.ConfigureAwait(false);
+        _udpThread?.Join(TimeSpan.FromSeconds(1));
         foreach (var connection in _online.Values) connection.Dispose();
         _registry.Save();
         _stopping.Dispose();
@@ -246,14 +395,30 @@ internal sealed class RendezvousServer : IAsyncDisposable
     /// <summary>One registered PC: its TLS stream (writes taken one at a time), ID, key and addresses.</summary>
     private sealed class Connection(TcpClient tcp, SslStream tls, IPAddress ip) : IDisposable
     {
+        /// <summary>Relayed packets waiting for a PC on the TCP relay; when it cannot keep up, new ones are dropped.</summary>
+        public const int RelayQueue = 1024;
+
         private readonly SemaphoreSlim _writing = new(1, 1);
         private readonly Queue<DateTimeOffset> _finds = new();
+        private readonly Channel<byte[]> _relayed = Channel.CreateBounded<byte[]>(
+            new BoundedChannelOptions(RelayQueue) { SingleReader = true, FullMode = BoundedChannelFullMode.DropWrite });
+        private int _delivering;
 
         public SslStream Tls { get; } = tls;
         public IPAddress Ip { get; } = ip;
         public uint Id { get; set; }
         public byte[] PublicKey { get; set; } = [];
-        public IReadOnlyList<PeerAddress> Addresses { get; set; } = [];
+        /// <summary>The token the PC's UDP address check carries.</summary>
+        public byte[] Token { get; } = RandomNumberGenerator.GetBytes(RendezvousWire.TokenSize);
+        public IReadOnlyList<PeerAddress> Lan { get; set; } = [];
+        /// <summary>Where the PC's UDP packets come from on the internet; null until its address check (or if UDP is blocked).</summary>
+        public volatile IPEndPoint? PublicUdp;
+        /// <summary>The relay this PC joined over TLS, if any.</summary>
+        public volatile Relay? TcpRelay;
+
+        /// <summary>LAN addresses, and the checked public UDP address when there is one.</summary>
+        public IReadOnlyList<PeerAddress> Addresses =>
+            PublicUdp is { } seen ? [.. Lan, new PeerAddress(AddressKind.Public, seen)] : Lan;
 
         public bool AllowFind(int perMinute)
         {
@@ -280,10 +445,88 @@ internal sealed class RendezvousServer : IAsyncDisposable
             }
         }
 
+        /// <summary>Queues one relayed packet; a single task writes them out in order as Relay data.</summary>
+        public void Deliver(byte[] packet, CancellationToken cancel)
+        {
+            if (!_relayed.Writer.TryWrite(packet) || Interlocked.Exchange(ref _delivering, 1) != 0) return;
+            _ = DeliverLoop(cancel);
+        }
+
+        private async Task DeliverLoop(CancellationToken cancel)
+        {
+            try
+            {
+                await foreach (var packet in _relayed.Reader.ReadAllAsync(cancel).ConfigureAwait(false))
+                    await SendAsync(RendezvousType.RelayDelivered, packet, cancel).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is IOException or ObjectDisposedException or OperationCanceledException)
+            {
+            }
+        }
+
         public void Dispose()
         {
+            _relayed.Writer.TryComplete();
             Tls.Dispose();
             tcp.Dispose();
+        }
+    }
+
+    /// <summary>One connect ID's relay: the two PCs it was made for, and how each has joined.</summary>
+    private sealed class Relay(byte[] connectId, Connection viewer, Connection host)
+    {
+        private readonly object _lock = new();
+        private IPEndPoint? _viewerUdp, _hostUdp;
+        private bool _viewerTcp, _hostTcp, _viewerToldTcp, _hostToldTcp;
+        private long _lastActive = Environment.TickCount64;
+
+        public byte[] ConnectId { get; } = connectId;
+        public Connection Viewer { get; } = viewer;
+        public Connection Host { get; } = host;
+        public TimeSpan IdleFor => TimeSpan.FromMilliseconds(Environment.TickCount64 - Interlocked.Read(ref _lastActive));
+
+        public void Touch() => Interlocked.Exchange(ref _lastActive, Environment.TickCount64);
+
+        public IPEndPoint? UdpOf(Role role)
+        {
+            lock (_lock) return role == Role.Viewer ? _viewerUdp : _hostUdp;
+        }
+
+        public bool Joined(Role role)
+        {
+            lock (_lock) return role == Role.Viewer ? _viewerUdp is not null || _viewerTcp : _hostUdp is not null || _hostTcp;
+        }
+
+        public void JoinUdp(Role role, IPEndPoint endpoint)
+        {
+            lock (_lock)
+            {
+                if (role == Role.Viewer) _viewerUdp = endpoint;
+                else _hostUdp = endpoint;
+            }
+            Touch();
+        }
+
+        public void JoinTcp(Role role)
+        {
+            lock (_lock)
+            {
+                if (role == Role.Viewer) (_viewerTcp, _viewerUdp) = (true, null);
+                else (_hostTcp, _hostUdp) = (true, null);
+            }
+            Touch();
+        }
+
+        /// <summary>True only the first time: Relay ready goes once over TCP.</summary>
+        public bool ReadySentOverTcp(Role role)
+        {
+            lock (_lock)
+            {
+                bool sent = role == Role.Viewer ? _viewerToldTcp : _hostToldTcp;
+                if (role == Role.Viewer) _viewerToldTcp = true;
+                else _hostToldTcp = true;
+                return sent;
+            }
         }
     }
 }

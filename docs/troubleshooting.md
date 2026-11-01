@@ -14,6 +14,18 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-11-01 — Server would drop a PC's whole connection when the other PC left the TCP relay  (Plan step 12)
+Symptom:     Found in review, then shown by the test `When_the_other_PC_leaves_the_TCP_relay_this_PC_stays_online`: once the remote PC disconnected, the viewer's last session packets (Relay data, type 15) made the server close the viewer's TLS connection, so the viewer went offline too.
+Root cause:  The server's message loop accepted Relay data only "when the PC is on a relay"; with the relay already ended, the message fell to the default case, which treats it as a broken protocol and closes the connection.
+Exact fix:   Relay data with no relay is now dropped quietly. Also from the same review: packets for a PC on the TCP relay wait in one bounded queue per PC (1,024; extra ones dropped, as on a full network) with a single writer task, instead of one task per packet; idle relays are cleared every 10 s even when no UDP comes in; a Relay join TCP with an unknown role is ignored.
+Files:       `src/Sheron.Server/RendezvousServer.cs`, `tests/Sheron.Tests/Rendezvous/ConnectionTests.cs`, `docs/02-TRD.md`
+
+### 2026-11-01 — Connection test hung: the remote PC waited for a Hello that never came  (Plan step 12)
+Symptom:     Every connection test with UDP on the remote PC failed after 15 s with "No Hello came from the viewer".
+Root cause:  The test waited for both paths before starting either session. The remote PC's connector only knows its path when the viewer's Hello arrives (direct or through the relay), and the viewer's link sends that Hello, so each side waited for the other.
+Exact fix:   Start the viewer's link as soon as `ConnectAsync` returns, then await the remote PC's `AcceptAsync` and start its link on the path it returns (its transport hands the Hello on, so the viewer need not resend it). The app must do the same (Plan step 14).
+Files:       `tests/Sheron.Tests/Rendezvous/ConnectionTests.cs`, `src/Sheron.Core/Rendezvous/Connector.cs`
+
 ### 2026-11-01 — Smeared, broken picture after lost frames on the hotspot  (Plan step 9)
 Symptom:     Viewing the second laptop over the iPhone hotspot: smears and broken text in the picture, "Lost frames 9". On a still screen the damage stayed, because nothing new was sent.
 Root cause:  Wi-Fi through the phone loses packets in bursts larger than the repair shards; each later frame builds on the lost one, so the damage lasts until the next keyframe, which came only every 300 frames, and never on a still screen.

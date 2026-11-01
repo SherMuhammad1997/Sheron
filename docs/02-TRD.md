@@ -343,7 +343,7 @@ Sheron's own protocol between each PC and the server. The server only introduces
 | Registering | The server sends a challenge (32 random bytes). The PC answers Register: its device public key (64 bytes), its signature over "Sheron 1 register" + the challenge, and its addresses. The server checks the signature, then gives the ID tied to that key: the same key always gets the same ID |
 | IDs | 9 digits, 100 000 000 to 999 999 999, chosen at random and never reused. Shown in groups of three |
 | Registry | One text file, one line per device: ID, public key (hex), last seen (Unix seconds). Rewritten whole on a new device (written to a new file, then moved over the old one) and every 5 minutes |
-| Addresses | Each PC sends its LAN addresses with the UDP port of its link socket; the server adds the public address it sees on the TCP connection. Plan step 12 adds the public UDP port |
+| Addresses | Each PC sends its LAN addresses with the UDP port of its link socket; the server adds the public UDP address its address check saw (Plan step 12; none while UDP is blocked) |
 | Finding a PC | Find (a 9-digit ID): if that PC is online, the server makes a 16-byte connect ID and sends Found to the asker and Incoming to the target, each with the other's ID, device public key and addresses. The viewer then checks the handshake's host key against the key the server gave for that ID. Otherwise NotFound: unknown ID, or offline |
 | Staying online | The PC sends Ping every 25 s; the server answers Pong and drops a connection silent for 60 s. One connection per device: a new one replaces the old |
 | Limits | At most 20 Find a minute per connection and 30 new connections a minute per IP address; more are refused |
@@ -351,7 +351,7 @@ Sheron's own protocol between each PC and the server. The server only introduces
 | Type | Byte | Direction | Body |
 | --- | --- | --- | --- |
 | Challenge | 1 | server → PC | Version 1 (1 byte), 32 random bytes |
-| Registered | 2 | server → PC | ID (4 bytes) |
+| Registered | 2 | server → PC | ID (4 bytes), UDP token (16, Plan step 12) |
 | Found | 3 | server → viewer | Connect ID (16), ID (4), device public key (64), addresses |
 | Incoming | 4 | server → target | Connect ID (16), viewer's ID (4), viewer's device public key (64), addresses |
 | NotFound | 5 | server → viewer | ID (4), reason (1 byte: 1 unknown, 2 offline, 3 too many tries) |
@@ -363,6 +363,41 @@ Sheron's own protocol between each PC and the server. The server only introduces
 Addresses: a count (1 byte), then per address its kind (1 byte: 1 LAN, 2 public as the server sees it), family (1 byte: 4 or 6), the address (4 or 16 bytes) and the UDP port (2 bytes).
 
 Plan step 11 check: two clients on one machine register with a local server, get different IDs, keep them when they come back, and find each other.
+
+### Direct link, relay and TCP fallback (Plan step 12)
+
+Each PC has one UDP socket for everything: address check, punching, relay and the session itself, so its router keeps one mapping. Video and input stay sealed end to end on every path; the relay only forwards bytes.
+
+| Stage | How |
+| --- | --- |
+| Address check | Right after registering, the PC sends Address check (UDP, with the 16-byte token from Registered) to the server's UDP 443, three times 300 ms apart until it answers. The server answers Address seen: the public IP and port it saw. From then on Found and Incoming carry that public address. No answer: this PC's UDP is blocked, and it will use the TCP relay |
+| Punching | On Found (viewer) and Incoming (remote PC), both send Punch (connect ID, role) to each of the other's addresses, LAN and public, every 100 ms for up to 1.5 s, and answer each Punch with Punch ack. Sending out opens each router for the other's packets. The viewer takes the first address that answers (Punch or Punch ack) and starts the session handshake there; the remote PC takes whichever address the Hello comes from |
+| UDP relay | No answer within 1.5 s: the viewer sends Relay request (TLS) with the connect ID; the server passes it to the remote PC. Each side sends Relay join (UDP: connect ID, role) to the server's UDP 443; when both have joined, the server answers Relay ready and forwards every other packet from one side's address to the other's |
+| TCP 443 relay | A PC whose address check got no answer joins over its TLS connection instead (Relay join TCP), and its packets travel inside Relay data messages. The server forwards between the two sides whatever each used: UDP to UDP, TCP to UDP, or TCP to TCP. Packets for a PC on TCP wait in a queue of 1,024 at the server (4,096 at the PC); when it is full new ones are dropped, as on a full network |
+| Rules | Only the two PCs a connect ID was made for can join its relay (the ID is 16 random bytes known only to them and the server; a TCP join must also come from one of their two registered connections). A relay ends when either side's TLS connection closes, or after 60 s with no packets; Relay data after that is dropped quietly |
+
+| UDP message | Byte 0 | Body |
+| --- | --- | --- |
+| Address check | 0x30 | Token (16) |
+| Address seen | 0x31 | Family (1 byte: 4 or 6), IP (4 or 16), port (2) |
+| Relay join | 0x32 | Connect ID (16), role (1 byte: 1 viewer, 2 remote PC) |
+| Relay ready | 0x33 | Connect ID (16) |
+| Punch | 0x34 | Connect ID (16), role (1) |
+| Punch ack | 0x35 | Connect ID (16) |
+
+| TLS message | Byte | Direction | Body |
+| --- | --- | --- | --- |
+| Registered | 2 | server → PC | ID (4), UDP token (16) |
+| Relay request | 7 | server → remote PC | Connect ID (16) |
+| Relay ready | 8 | server → PC on TCP | Connect ID (16) |
+| Relay data | 9 | server → PC on TCP | One packet |
+| Relay request | 13 | viewer → server | Connect ID (16) |
+| Relay join TCP | 14 | PC → server | Connect ID (16), role (1) |
+| Relay data | 15 | PC on TCP → server | One packet |
+
+**Network simulator** for these tests (`Sheron.Sim`): in-memory UDP between simulated hosts in real time, each behind a router of its own site. A router maps an inside address to one public port for all destinations (or a new port for each destination: a "symmetric" router; punching fails when both PCs are behind one) and lets a packet in only from IP addresses the inside host has sent to. Hosts at one site reach each other by LAN address only: no "hairpin" through their own router's public address, which many routers cannot do. A site's UDP can be blocked, and so can traffic between two sites.
+
+Plan step 12 check: through the simulator, two PCs at different sites connect directly; with the direct path blocked they connect through the UDP relay; with one side's UDP blocked they connect through the TCP 443 relay; in each case a session runs (video frames and control messages arrive).
 
 ## Risks
 

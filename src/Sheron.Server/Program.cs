@@ -1,10 +1,12 @@
 using System.Net;
 using System.Runtime.InteropServices;
 using Sheron.Core;
+using Sheron.Core.Net;
 using Sheron.Core.Rendezvous;
 using Sheron.Server;
 
-// Sheron's server (TRD › Server): IDs and finding PCs (Plan step 11); address check and relay come in step 12.
+// Sheron's server (TRD › Server): IDs and finding PCs on TCP (Plan step 11), address check and relay on UDP with
+// the same port number (Plan step 12).
 //   Sheron.Server [--port 443] [--data <folder>]
 // The data folder keeps the TLS certificate and the ID registry. Logs go to standard output (journald under systemd).
 int port = 443;
@@ -20,10 +22,11 @@ void Write(string line) => Console.WriteLine($"{DateTimeOffset.UtcNow:yyyy-MM-dd
 
 using var certificate = ServerCertificate.LoadOrCreate(data);
 var registry = new IdRegistry(Path.Combine(data, "registry.txt"));
-await using var server = new RendezvousServer(new IPEndPoint(IPAddress.Any, port), certificate, registry);
+using var udp = new UdpTransport(port);
+await using var server = new RendezvousServer(new IPEndPoint(IPAddress.Any, port), certificate, registry, udp: udp);
 server.Log += Write;
 server.Start();
-Write($"{AppInfo.Name} server {AppInfo.Version} on TCP {port}; {registry.Count} devices known");
+Write($"{AppInfo.Name} server {AppInfo.Version} on TCP and UDP {port}; {registry.Count} devices known");
 // The app is built with this pin: SHA-256 of the certificate's public key.
 Write($"Server pin: {Convert.ToBase64String(RendezvousWire.Pin(certificate))}");
 

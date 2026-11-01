@@ -48,14 +48,14 @@ public sealed record LinkSnapshot(
 public sealed class Link : IDisposable
 {
     public const int DefaultPort = 47920;
-    public const int SocketBufferBytes = 4 << 20;
 
     private const int PollMicroseconds = 5000;
 
     private readonly DeviceKey _device;
     private readonly bool _isHost;
     private readonly LinkTimings _timings;
-    private readonly Socket _socket;
+    private readonly IPacketTransport _transport;
+    private readonly bool _ownsTransport;
     private readonly Thread _thread;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly object _gate = new();
@@ -85,18 +85,14 @@ public sealed class Link : IDisposable
     private byte[]? _finish;
     private bool _heardSealed;
 
-    private Link(DeviceKey device, bool isHost, IPEndPoint bindTo, IPEndPoint? remote, LinkTimings timings)
+    private Link(DeviceKey device, bool isHost, IPacketTransport transport, bool ownsTransport, IPEndPoint? remote, LinkTimings timings)
     {
         _device = device;
         _isHost = isHost;
         _timings = timings;
-        _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp)
-        {
-            ReceiveBufferSize = SocketBufferBytes,
-            SendBufferSize = SocketBufferBytes,
-        };
-        _socket.Bind(bindTo);
-        LocalEndPoint = (IPEndPoint)_socket.LocalEndPoint!;
+        _transport = transport;
+        _ownsTransport = ownsTransport;
+        LocalEndPoint = transport.LocalEndPoint;
         if (isHost)
         {
             _state = LinkState.Waiting;
@@ -113,13 +109,24 @@ public sealed class Link : IDisposable
         _thread.Start();
     }
 
-    /// <summary>The remote PC's side: waits for a viewer on <paramref name="port"/> (0: any free port).</summary>
+    /// <summary>The remote PC's side: waits for a viewer on its own UDP <paramref name="port"/> (0: any free port).</summary>
     public static Link Host(DeviceKey device, int port = DefaultPort, LinkTimings? timings = null) =>
-        new(device, true, new IPEndPoint(IPAddress.Any, port), null, timings ?? LinkTimings.Default);
+        new(device, true, new UdpTransport(port), true, null, timings ?? LinkTimings.Default);
 
-    /// <summary>The viewer's side: connects to the remote PC at <paramref name="remote"/>.</summary>
+    /// <summary>The viewer's side: connects to the remote PC at <paramref name="remote"/> from its own UDP socket.</summary>
     public static Link Viewer(DeviceKey device, IPEndPoint remote, LinkTimings? timings = null) =>
-        new(device, false, new IPEndPoint(IPAddress.Any, 0), remote, timings ?? LinkTimings.Default);
+        new(device, false, new UdpTransport(0), true, remote, timings ?? LinkTimings.Default);
+
+    /// <summary>
+    /// The remote PC's side on a path the connector found (direct, relay or TCP relay): the transport stays open
+    /// after the link, for the next session.
+    /// </summary>
+    public static Link Host(DeviceKey device, IPacketTransport transport, LinkTimings? timings = null) =>
+        new(device, true, transport, false, null, timings ?? LinkTimings.Default);
+
+    /// <summary>The viewer's side on a path the connector found: <paramref name="remote"/> is the remote PC or the relay.</summary>
+    public static Link Viewer(DeviceKey device, IPacketTransport transport, IPEndPoint remote, LinkTimings? timings = null) =>
+        new(device, false, transport, false, remote, timings ?? LinkTimings.Default);
 
     public IPEndPoint LocalEndPoint { get; }
 
@@ -170,25 +177,16 @@ public sealed class Link : IDisposable
     private void Run()
     {
         var buffer = new byte[PacketLimits.MaxDatagram + 1];
+        var wait = TimeSpan.FromMicroseconds(PollMicroseconds);
         while (!_stopping)
         {
             try
             {
-                if (_socket.Poll(PollMicroseconds, SelectMode.SelectRead))
+                if (_transport.TryReceive(buffer, wait, out int length, out var from))
                 {
-                    do
-                    {
-                        EndPoint from = new IPEndPoint(IPAddress.Any, 0);
-                        int length = _socket.ReceiveFrom(buffer, ref from);
-                        Handle(buffer.AsSpan(0, length), (IPEndPoint)from);
-                    }
-                    while (_socket.Available > 0);
+                    do Handle(buffer.AsSpan(0, length), from);
+                    while (!_stopping && _transport.TryReceive(buffer, TimeSpan.Zero, out length, out from));
                 }
-            }
-            catch (SocketException error) when (error.SocketErrorCode is SocketError.ConnectionReset or SocketError.MessageSize)
-            {
-                // Windows reports an ICMP "port unreachable" for an earlier packet as a reset; oversized packets are not
-                // Sheron's. Neither stops the link.
             }
             catch (Exception error) when (_stopping && error is ObjectDisposedException or SocketException)
             {
@@ -386,20 +384,19 @@ public sealed class Link : IDisposable
     {
         try
         {
-            _socket.SendTo(packet, to);
+            _transport.Send(packet, to);
             _packetsSent++;
             _bytesSent += packet.Length;
         }
-        catch (Exception error) when (error is SocketException || (error is ObjectDisposedException && _stopping))
+        catch (ObjectDisposedException) when (_stopping)
         {
-            // Network gone for a moment: the packet is lost like any other; resends and the timeout handle it.
         }
     }
 
     public void Dispose()
     {
         _stopping = true;
-        _socket.Dispose();
+        if (_ownsTransport && _transport is IDisposable owned) owned.Dispose();
         _thread.Join(TimeSpan.FromSeconds(2));
         lock (_gate)
         {

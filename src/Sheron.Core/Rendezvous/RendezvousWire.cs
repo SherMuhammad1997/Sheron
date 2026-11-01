@@ -16,9 +16,39 @@ public enum RendezvousType : byte
     Incoming = 4,
     NotFound = 5,
     Pong = 6,
+    /// <summary>Server → remote PC: the viewer asks for the relay (Plan step 12).</summary>
+    RelayAsked = 7,
+    /// <summary>Server → PC on the TCP relay: both sides have joined.</summary>
+    RelayReady = 8,
+    /// <summary>Server → PC on the TCP relay: one packet from the other PC.</summary>
+    RelayDelivered = 9,
     Register = 10,
     Find = 11,
     Ping = 12,
+    /// <summary>Viewer → server: no direct path; use the relay.</summary>
+    RelayRequest = 13,
+    /// <summary>PC → server: join the relay over this TLS connection (its UDP is blocked).</summary>
+    RelayJoin = 14,
+    /// <summary>PC on the TCP relay → server: one packet for the other PC.</summary>
+    RelaySend = 15,
+}
+
+/// <summary>Byte 0 of the UDP messages around a session: with the server, and between the two PCs (Plan step 12).</summary>
+public enum UdpMessage : byte
+{
+    AddressCheck = 0x30,
+    AddressSeen = 0x31,
+    RelayJoin = 0x32,
+    RelayReady = 0x33,
+    Punch = 0x34,
+    PunchAck = 0x35,
+}
+
+/// <summary>Which end of a connection a PC is.</summary>
+public enum Role : byte
+{
+    Viewer = 1,
+    Host = 2,
 }
 
 public enum AddressKind : byte
@@ -52,6 +82,7 @@ public static class RendezvousWire
     public const int MaxMessage = 4096;
     public const int ChallengeSize = 32;
     public const int ConnectIdSize = 16;
+    public const int TokenSize = 16;
     public const int PublicKeySize = 64;
     public const int SignatureSize = 64;
     public const uint FirstId = 100_000_000;
@@ -170,6 +201,44 @@ public static class RendezvousWire
         uint id = BinaryPrimitives.ReadUInt32LittleEndian(body[ConnectIdSize..]);
         if (!IsId(id)) return false;
         peer = new PeerInfo(body[..ConnectIdSize].ToArray(), id, body.Slice(ConnectIdSize + 4, PublicKeySize).ToArray(), addresses);
+        return true;
+    }
+
+    /// <summary>A UDP message whose body is a 16-byte connect ID or token, with an optional role after it.</summary>
+    public static byte[] Udp(UdpMessage kind, ReadOnlySpan<byte> idOrToken, Role? role = null) =>
+        role is { } r ? [(byte)kind, .. idOrToken, (byte)r] : [(byte)kind, .. idOrToken];
+
+    /// <summary>Reads a UDP message's connect ID or token (and role, when <paramref name="withRole"/>).</summary>
+    public static bool TryReadUdp(ReadOnlySpan<byte> packet, UdpMessage kind, bool withRole, out byte[] idOrToken, out Role role)
+    {
+        idOrToken = [];
+        role = default;
+        int length = 1 + ConnectIdSize + (withRole ? 1 : 0);
+        if (packet.Length != length || packet[0] != (byte)kind) return false;
+        idOrToken = packet.Slice(1, ConnectIdSize).ToArray();
+        if (withRole)
+        {
+            role = (Role)packet[^1];
+            if (!Enum.IsDefined(role)) return false;
+        }
+        return true;
+    }
+
+    /// <summary>Address seen: the public address the server saw a PC's UDP packet come from.</summary>
+    public static byte[] AddressSeen(IPEndPoint seen)
+    {
+        var addresses = Addresses([new PeerAddress(AddressKind.Public, seen)]);
+        return [(byte)UdpMessage.AddressSeen, .. addresses.AsSpan(2)];
+    }
+
+    public static bool TryReadAddressSeen(ReadOnlySpan<byte> packet, out IPEndPoint? seen)
+    {
+        seen = null;
+        if (packet.Length < 2 || packet[0] != (byte)UdpMessage.AddressSeen) return false;
+        // The same layout as one entry of an address list, without the count and kind.
+        byte[] asList = [1, (byte)AddressKind.Public, .. packet[1..]];
+        if (!TryReadAddresses(asList, out var list, out int used) || used != asList.Length) return false;
+        seen = list[0].EndPoint;
         return true;
     }
 
