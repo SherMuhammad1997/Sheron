@@ -75,13 +75,16 @@ File transfer, clipboard sync, chat, sound, session recording, more than one mon
 | 25 Oct | Version 1 is Windows ↔ Windows only |
 | 25 Oct | Simple app, few features, speed first |
 | 25 Oct | #1 UI style: Control Room (same as Virtual Repeater, drawn in the design canvas) |
-| 25 Oct | #2 Server: Alibaba Cloud Hong Kong (best route in the 25 Oct test) |
+| 25 Oct | #2 Server: Alibaba Cloud Hong Kong (best route in the 25 Oct test); changed to Oracle Cloud on 1 Nov, below |
 | 25 Oct | Unattended access (F5) is in version 1 |
 | 25 Oct | Version 1 shows the main monitor only; no file transfer or clipboard |
 | 25 Oct | Encoder target stays ≤ 5 ms per frame. Intel GPUs get their own route through Intel oneVPL (Plan step 4b), because Intel's Media Foundation encoder cannot go below about 6.5 ms at 1920 × 1200 |
 | 26 Oct | Intel oneVPL measured the same floor (about 6 ms at 1920 × 1200 on the Core 7 240H: the chip's own encode time), so the encoder target is ≤ 7 ms average on Intel built-in graphics and stays ≤ 5 ms on NVIDIA and AMD. oneVPL is the default route on Intel (option A) |
 | 26 Oct | The average swings by about 1 ms between runs (6.7 and 7.6 ms; floor 6 ms), so the Intel target is ≤ 8 ms average, measured over 5 s (300 frames) (option A) |
 | 1 Nov | Order after step 9 (Sher: "start preparing for cloud deployment"): server steps 11 and 12, then passwords (step 16) so the server never goes online without them, then deployment (13) and connect by ID (14); step 10 after that. Every screen layout shows the password (Sher) |
+| 1 Nov | Home screen: layout 3 "Address bar" from the 10 layouts (`docs/design/LayoutsAndLogos.html`): partner ID, password and Connect in one line at the top; this PC's ID and one-time password below on the left, Recent on the right (Sher). Built in Plan step 15 |
+| 1 Nov | Logo: idea 10 "Wordmark", the name with its o drawn as a small screen (Sher). Drawn for the working name; redrawn if the product name changes (open decision 6) |
+| 1 Nov | Server: Oracle Cloud (Always Free) with Oracle Linux 9, the free CentOS-family system (CentOS Linux itself gets no more security updates). Replaces Alibaba Cloud Hong Kong from 25 Oct. Region chosen at sign-up; Singapore recommended (202 ms average in the 25 Oct test, the best measured) (Sher) |
 | 1 Nov | Testing on a second PC uses one self-contained `Sheron.exe`: copy it over and double-click, no install, no .NET, no GitHub account on that PC. Until the home screen (Plan step 15) it opens a small start window: "Share this screen" or "View a PC" by IP address |
 
 ## Decisions still open — ask Sher

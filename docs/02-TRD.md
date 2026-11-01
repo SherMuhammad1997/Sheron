@@ -211,7 +211,7 @@ Measured 1 Nov on Sher's two laptops, both on an iPhone hotspot (each packet cro
 
 | Item | Detail |
 | --- | --- |
-| Server | One server to start: Alibaba Cloud Hong Kong (PRD decision #2). More regions later |
+| Server | One server to start: Oracle Cloud, Always Free, Oracle Linux 9; region chosen at sign-up, Singapore recommended (PRD decision 1 Nov, replacing Alibaba Cloud Hong Kong). More regions later |
 | Stay online | Each PC keeps a TLS 1.3 connection to the server on TCP 443; heartbeat every 25 s |
 | Connect | Viewer asks the server for the ID; the server tells both sides each other's addresses (LAN and public) |
 | Direct link | Both sides send UDP probes to each other at the same time for up to 1.5 s (hole punching). A LAN address wins when both are on the same network |
@@ -326,7 +326,7 @@ Everything else uses .NET 8 built-ins (`SslStream`, `AesGcm`, `ECDiffieHellman`,
 
 | Item | Detail |
 | --- | --- |
-| Machine | Ubuntu 24.04 LTS, 2 vCPU, 2 GB RAM to start |
+| Machine | Oracle Cloud Always Free virtual machine with Oracle Linux 9 (PRD decision 1 Nov): the Arm (Ampere A1) shape, or the small AMD one to start. The server is a self-contained .NET 8 program for Linux (linux-arm64 or linux-x64), so the machine needs no .NET install; `firewalld` opens TCP 443 and UDP 443; it runs as a systemd service with only the right to use port 443 (Plan step 13) |
 | Stores | ID ↔ public key and last-seen time, in one small file. No passwords, no screen data |
 | Bandwidth | A relayed session uses about 0.3–2 Mbps; 100 Mbps carries about 50–100 relayed sessions at once. Direct links cost the server nothing |
 | Limits | Connect attempts limited per IP address and per ID |

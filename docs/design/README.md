@@ -10,6 +10,10 @@ Five boards for version 1, in the Control Room style (PRD decision #1, 25 Oct). 
 | 4 · Settings | Unattended password, PC name, start with Windows, default quality, server | `Settings.dc.html` |
 | 5 · How it connects | Server in Hong Kong, direct link first, relay only if direct fails, encrypted end to end | `HowItConnects.dc.html` |
 
+## Layouts and logo (1 Nov)
+
+`LayoutsAndLogos.html` (rendered: https://claude.ai/artifact/UkeKg4KL8xAaLxUiuEjudD) holds 10 main-window layouts and 10 logo ideas. Sher chose **layout 3, "Address bar"**: partner ID, password and Connect in one line at the top; this PC's ID and one-time password below on the left, Recent on the right. Logo: **idea 10, "Wordmark"**: the name with its o drawn as a small screen. The Home board above is redrawn to layout 3 in Plan step 15.
+
 ## Style
 
 | Token | Value |
