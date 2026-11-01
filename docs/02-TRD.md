@@ -346,7 +346,7 @@ Everything else uses .NET 8 built-ins (`SslStream`, `AesGcm`, `ECDiffieHellman`,
 | Secrets | `%ProgramData%\Sheron\secrets.bin` (DPAPI): device private key, fixed-password hash |
 | Recent list | `%AppData%\Sheron\recent.json` (per Windows user) |
 | Known keys | `%AppData%\Sheron\known-keys.json`: remote ID → device key fingerprint (key pinning; public data, no secrets) |
-| Server | `/opt/sheron-server`, systemd unit `sheron-server`, logs to journald; data folder (`--data`) with `server-certificate.pfx` (the TLS key, readable by the server's user only) and `registry.txt` |
+| Server | `/opt/sheron-server`, systemd unit `sheron-server`, logs to journald; data folder `/opt/sheron-server/data` (`--data`) with `server-certificate.pfx` (the TLS key, readable by the server's user only) and `registry.txt`. Install files in the repository's `deploy/` folder |
 
 ## Server
 
@@ -356,6 +356,17 @@ Everything else uses .NET 8 built-ins (`SslStream`, `AesGcm`, `ECDiffieHellman`,
 | Stores | ID ↔ public key and last-seen time, in one small file. No passwords, no screen data |
 | Bandwidth | A relayed session uses about 0.3–2 Mbps; 100 Mbps carries about 50–100 relayed sessions at once. Direct links cost the server nothing |
 | Limits | Connect attempts limited per IP address and per ID |
+
+### Deployment (Plan step 13)
+
+| Item | Detail |
+| --- | --- |
+| Machine | `sheron-server` in Oracle Cloud, Singapore: VM.Standard.A1.Flex (Arm, 1 OCPU, 6 GB) when Oracle has capacity, otherwise VM.Standard.E2.1.Micro (AMD, 1 GB); both Always Free. Oracle Linux 9, log-in user `opc` with an SSH key. No domain for now (PRD open decision 3): the app uses the server's public IP address |
+| Program | `dotnet publish src/Sheron.Server -c Release -r linux-x64` (AMD) or `linux-arm64` (Arm) `--self-contained -p:PublishSingleFile=true`: one file, `Sheron.Server`, with .NET inside. Invariant globalization, so it needs no ICU on the machine |
+| Install | `deploy/install.sh` with `deploy/sheron-server.service`, copied to the machine with the program and run with `sudo bash install.sh`. It makes the `sheron` system user (no login), puts the program in `/opt/sheron-server` and the data in `/opt/sheron-server/data` (only `sheron` can read it), sets SELinux labels, opens TCP and UDP 443 in `firewalld`, and enables and starts the service. Run again to update: the data folder is kept |
+| Service | Runs as `sheron` with only `CAP_NET_BIND_SERVICE` (port 443); the rest of the machine read-only to it (`ProtectSystem=strict`, own `/tmp`); restarts 2 s after any stop it did not ask for; log in journald (`journalctl -u sheron-server`), where the pin is too |
+| Oracle network | The subnet's security list lets in TCP 443 and UDP 443 from anywhere (0.0.0.0/0), besides SSH (TCP 22) |
+| Check | `Sheron.Win.exe --server <IP>[:port] --pin <pin>` opens a developer window that connects to the server, checks its pin, registers this PC and runs the UDP address check, and shows this PC's ID and public UDP address (Plan step 13 "Done when": a client registers from Sher's laptop) |
 
 ### Rendezvous protocol (Plan step 11)
 

@@ -1,0 +1,33 @@
+# Sheron's server as a systemd service (Plan step 13; TRD › Server › Deployment).
+# Installed to /etc/systemd/system/ by install.sh.
+[Unit]
+Description=Sheron server: IDs, finding PCs, relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sheron
+Group=sheron
+ExecStart=/opt/sheron-server/Sheron.Server --port 443 --data /opt/sheron-server/data
+WorkingDirectory=/opt/sheron-server/data
+Environment=HOME=/opt/sheron-server/data
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Environment=DOTNET_EnableDiagnostics=0
+# Of root's rights, only the one to use port 443 (below 1024).
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+# The rest of the machine is read-only to the server; it writes only its data folder.
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/sheron-server/data
+PrivateTmp=true
+PrivateDevices=true
+Restart=always
+RestartSec=2
+TimeoutStopSec=10
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
