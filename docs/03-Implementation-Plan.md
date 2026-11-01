@@ -4,7 +4,7 @@ Oct 25, 2026 · @Sher Muhammad
 
 ## How the build runs
 
-The build is 21 steps in 5 phases, plus step 4b (added 25 Oct). A fast picture on one PC comes first: if the speed targets fail there, nothing else matters. This is document 3 of 3; no dates are set.
+The build is 21 steps in 5 phases, plus step 4b (added 25 Oct). Order changed 1 Nov (PRD decisions): after step 9 come 11, 12, 16 (passwords), 13, 14, then 10, then the rest of phase 4. A fast picture on one PC comes first: if the speed targets fail there, nothing else matters. This is document 3 of 3; no dates are set.
 
 ```text
 Phase 0  Repository and solution             steps 1-2
