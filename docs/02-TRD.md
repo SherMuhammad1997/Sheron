@@ -165,6 +165,8 @@ Measured 26 Oct in the cloud session (tests `BadNetworkTests`):
 | Pointer | Remote PC sends the shape when it changes, then positions. While the viewer's mouse is over the remote picture, the viewer's own Windows pointer takes the remote shape (built with `CreateIconIndirect`: colour with alpha, monochrome and masked-colour shapes), so it moves with no delay, and the drawn pointer is hidden. Elsewhere the drawn pointer shows where the remote pointer is |
 | Limits until Plan step 17 | `SendInput` from a normal program cannot reach programs running as administrator, the UAC prompt or the lock screen (Windows blocks it). The service in Plan step 17 runs at system level for those |
 
+Plan step 9 check, 1 Nov: Sher controlled his second laptop from his own over the iPhone hotspot with the one-file `Sheron.exe` (mouse, clicks, typing), and with keyframe on request the picture stayed clean after lost frames.
+
 ## Connect by IP (Plan step 8, developer mode)
 
 Before the server exists (Plan steps 11–14), two PCs on the same network connect by IP address. This is a developer mode: no ID or password yet (Plan steps 11 and 16).
