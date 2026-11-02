@@ -14,6 +14,12 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-11-02 — By ID: viewer showed "Path: Direct" but stayed on "Connecting"  (Plan step 14)
+Symptom:     Sher's laptop viewed ID 622 531 326 (a Windows Server on an office network with two gateways, used through Remote Desktop). The viewer showed "Path: Direct · 119.30.112.11:2048" (the server's public address) but stayed on "Connecting to ID …" with no remote key; the sharing window stayed on "Waiting for a viewer".
+Root cause:  The viewer took the first address that sent it anything during punching. A Punch from the remote PC only proves packets reach the viewer, not the way back; on a path that works one way (a firewall or router at the far end dropping the viewer's packets), the viewer started the handshake on a dead path and never fell back to the relay. Reproduced in the simulator with a one-way block. The exact network cause at Sher's office is not confirmed yet.
+Exact fix:   The viewer takes a direct path only on a Punch ack (its own Punch got through and the answer came back); a Punch from the remote PC is answered and its address punched too. If the session handshake on a direct path still has not finished within 3 s, the viewer drops it and asks for the relay, and the remote PC joins that relay even after it took a direct path. The simulator now drops a blocked packet after it has left its own router, as a far-end firewall does, and can block one way only.
+Files:       `src/Sheron.Core/Rendezvous/Connector.cs`, `src/Sheron.Core/Rendezvous/HostRendezvous.cs`, `src/Sheron.Win/ViewerTestForm.cs`, `src/Sheron.Sim/SimNetwork.cs`, `tests/Sheron.Tests/Rendezvous/ConnectByIdTests.cs`, `docs/02-TRD.md`
+
 ### 2026-11-02 — Oracle Cloud: "Out of capacity", "Too many requests", "Request not completed within 20000 ms"  (Plan step 13)
 Symptom:     Creating the server machine in Singapore failed with "Out of capacity for shape VM.Standard.A1.Flex in availability domain AD-1" (and the same for VM.Standard.E2.1.Micro); clicking Create again soon gave "Too many requests for the user"; one try gave "Request not completed within 20000 ms", and oracle.com would not load for a while.
 Root cause:  Oracle's free machines in a region are shared by everyone; when none is spare, Create fails until someone frees one. Many clicks in a short time are throttled. The 20-second message only means the console stopped waiting: the request may still go through.

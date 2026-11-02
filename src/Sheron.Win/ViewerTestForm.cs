@@ -100,6 +100,7 @@ internal sealed class ViewerTestForm : DevForm
             return;
         }
         StartRefresh();
+        WireControl(video);
         if (_remote is not null) StartSession(Link.Viewer(_key, _remote), expectedHostKey: null);
         else _ = ConnectById(_key, _id!.Value);
     }
@@ -151,6 +152,29 @@ internal sealed class ViewerTestForm : DevForm
             _stage = null;
             // The remote PC's key must be the one the server gave for that ID (TRD › Connect by ID › Remote PC's key).
             StartSession(Link.Viewer(key, path.Transport, path.Remote), peer.PublicKey);
+            if (path.Kind != PathKind.Direct) return;
+
+            // A direct path must finish the session handshake in time, or the relay takes over (TRD › Direct handshake check).
+            var waited = Stopwatch.StartNew();
+            while (waited.Elapsed < ConnectTimings.Default.HandshakeWait && _link?.Snapshot().State == LinkState.Connecting)
+                await Task.Delay(100, _closing.Token);
+            if (_link?.Snapshot().State != LinkState.Connecting || _access?.WrongHostKey == true) return;
+
+            _stage = "The direct path did not answer both ways: trying the relay …";
+            _access?.Dispose();
+            _link?.Dispose();
+            _access = null;
+            _link = null;
+            path = await connector.RelayAsync(peer, _closing.Token);
+            if (_closing.IsCancellationRequested)
+            {
+                (path.Transport as TcpRelayTransport)?.Dispose();
+                return;
+            }
+            _path = path.Kind;
+            _tcp = path.Transport as TcpRelayTransport;
+            _stage = null;
+            StartSession(Link.Viewer(key, path.Transport, path.Remote), peer.PublicKey);
         }
         catch (AuthenticationException)
         {
@@ -191,7 +215,6 @@ internal sealed class ViewerTestForm : DevForm
         });
         link.FrameReceived += OnFrame;
         link.ControlReceived += OnControl;
-        WireControl(Video!);
     }
 
     /// <summary>Mouse and keys over the picture go to the remote PC (TRD › Input path).</summary>

@@ -12,7 +12,8 @@ public sealed record ConnectTimings(
     TimeSpan CheckEvery,
     int Checks,
     TimeSpan RelayWait,
-    TimeSpan AcceptWait)
+    TimeSpan AcceptWait,
+    TimeSpan HandshakeWait)
 {
     public static readonly ConnectTimings Default = new(
         PunchFor: TimeSpan.FromSeconds(1.5),
@@ -20,7 +21,8 @@ public sealed record ConnectTimings(
         CheckEvery: TimeSpan.FromMilliseconds(300),
         Checks: 3,
         RelayWait: TimeSpan.FromSeconds(3),
-        AcceptWait: TimeSpan.FromSeconds(15));
+        AcceptWait: TimeSpan.FromSeconds(15),
+        HandshakeWait: TimeSpan.FromSeconds(3));
 }
 
 public enum PathKind
@@ -104,14 +106,39 @@ public sealed class Connector
     {
         if (UdpWorks && await Task.Run(() => Punch(peer, cancel), cancel).ConfigureAwait(false) is { } direct)
             return new ConnectedPath(PathKind.Direct, _udp, direct);
+        return await RelayAsync(peer, cancel).ConfigureAwait(false);
+    }
 
+    /// <summary>
+    /// Viewer: the relay without punching, for when a direct path did not finish its session handshake within
+    /// <see cref="ConnectTimings.HandshakeWait"/> (TRD › Direct handshake check). UDP relay, else TCP 443.
+    /// </summary>
+    public async Task<ConnectedPath> RelayAsync(PeerInfo peer, CancellationToken cancel = default)
+    {
         await _server.RequestRelayAsync(peer.ConnectId, cancel).ConfigureAwait(false);
-        if (UdpWorks && await Task.Run(() => JoinUdpRelay(peer.ConnectId, cancel), cancel).ConfigureAwait(false))
+        if (UdpWorks && await Task.Run(() => JoinUdpRelay(peer.ConnectId, Role.Viewer, cancel), cancel).ConfigureAwait(false))
             return new ConnectedPath(PathKind.Relay, _udp, _serverUdp);
 
         var tcp = await JoinTcpRelay(peer.ConnectId, Role.Viewer, _timings.RelayWait, cancel).ConfigureAwait(false);
         return new ConnectedPath(PathKind.TcpRelay, tcp, tcp.Peer);
     }
+
+    /// <summary>
+    /// Remote PC: joins the relay of <paramref name="connectId"/> when the viewer asks for it after this PC already
+    /// took a direct path (TRD › Direct handshake check). UDP relay, else TCP 443.
+    /// </summary>
+    public async Task<ConnectedPath> JoinRelayAsHostAsync(byte[] connectId, CancellationToken cancel = default)
+    {
+        if (UdpWorks && await Task.Run(() => JoinUdpRelay(connectId, Role.Host, cancel), cancel).ConfigureAwait(false))
+            return new ConnectedPath(PathKind.Relay, _udp, _serverUdp);
+        var tcp = await JoinTcpRelay(connectId, Role.Host, _timings.RelayWait, cancel).ConfigureAwait(false);
+        return new ConnectedPath(PathKind.TcpRelay, tcp, tcp.Peer);
+    }
+
+    /// <summary>Takes a relay request for <paramref name="connectId"/> off the list; true when there was one.</summary>
+    internal bool TakeRelayRequest(byte[] connectId) => _relayAsked.TryRemove(Convert.ToHexString(connectId), out _);
+
+    internal void AddRelayRequest(byte[] connectId) => _relayAsked[Convert.ToHexString(connectId)] = true;
 
     /// <summary>
     /// Remote PC, on Incoming: punches back, joins the relay if the viewer asks, and returns the path the viewer's
@@ -133,7 +160,10 @@ public sealed class Connector
         return new ConnectedPath(PathKind.TcpRelay, tcp, tcp.Peer);
     }
 
-    /// <summary>Viewer: Punch to every address of the other PC; the first address that answers is the path.</summary>
+    /// <summary>
+    /// Viewer: Punch to every address of the other PC; the first address that answers with Punch ack is the path, as
+    /// that proves packets get through both ways. A Punch from the other PC is answered, and its address punched too.
+    /// </summary>
     private IPEndPoint? Punch(PeerInfo peer, CancellationToken cancel)
     {
         var punch = RendezvousWire.Udp(UdpMessage.Punch, peer.ConnectId, Role.Viewer);
@@ -154,8 +184,14 @@ public sealed class Connector
             if (RendezvousWire.TryReadUdp(packet, UdpMessage.Punch, true, out var id, out var role) && role == Role.Host
                 && id.AsSpan().SequenceEqual(peer.ConnectId))
             {
+                // Only proves the way back; keep punching, now also to where this came from.
                 _udp.Send(RendezvousWire.Udp(UdpMessage.PunchAck, peer.ConnectId), from);
-                return from;
+                if (!targets.Contains(from))
+                {
+                    targets.Add(from);
+                    _udp.Send(punch, from);
+                }
+                continue;
             }
             if (RendezvousWire.TryReadUdp(packet, UdpMessage.PunchAck, false, out id, out _) && id.AsSpan().SequenceEqual(peer.ConnectId))
                 return from;
@@ -163,10 +199,10 @@ public sealed class Connector
         return null;
     }
 
-    /// <summary>Viewer: Relay join to the server until it answers Relay ready (both PCs joined).</summary>
-    private bool JoinUdpRelay(byte[] connectId, CancellationToken cancel)
+    /// <summary>Relay join to the server until it answers Relay ready (both PCs joined).</summary>
+    private bool JoinUdpRelay(byte[] connectId, Role role, CancellationToken cancel)
     {
-        var join = RendezvousWire.Udp(UdpMessage.RelayJoin, connectId, Role.Viewer);
+        var join = RendezvousWire.Udp(UdpMessage.RelayJoin, connectId, role);
         var buffer = new byte[PacketLimits.MaxDatagram + 1];
         var clock = Stopwatch.StartNew();
         var nextSend = TimeSpan.Zero;

@@ -69,6 +69,12 @@ public sealed class SimNetwork
         return transport;
     }
 
+    /// <summary>Drops all UDP from <paramref name="from"/> to <paramref name="to"/>, but not back: a path that works one way only.</summary>
+    public void BlockOneWay(SimSite from, SimSite to)
+    {
+        lock (_lock) _blocked.Add((from, to));
+    }
+
     /// <summary>Drops all UDP between the two sites both ways, as a strict firewall would.</summary>
     public void Block(SimSite a, SimSite b)
     {
@@ -92,12 +98,19 @@ public sealed class SimNetwork
             if (target is null)
             {
                 var (destination, inside) = Find(to);
-                if (destination is null || destination == site || site.UdpBlocked || destination.UdpBlocked || _blocked.Contains((site, destination)))
+                if (destination is null || destination == site || site.UdpBlocked || destination.UdpBlocked)
                 {
                     Dropped++;
                     return;
                 }
+                // The packet leaves through its own router (which then lets answers from there in) before a block on
+                // the way, or a firewall at the far end, drops it.
                 from = Outbound(site, source.LocalEndPoint, to);
+                if (_blocked.Contains((site, destination)))
+                {
+                    Dropped++;
+                    return;
+                }
                 target = inside is null ? null : _transports.FirstOrDefault(t => t.Site == destination && t.LocalEndPoint.Equals(inside));
                 if (target is null || (destination.PublicIp is not null && !Allowed(destination, to.Port, from.Address)))
                 {

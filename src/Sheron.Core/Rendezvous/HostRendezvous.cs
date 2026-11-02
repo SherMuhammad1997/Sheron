@@ -6,8 +6,9 @@ namespace Sheron.Core.Rendezvous;
 /// <summary>
 /// The remote PC's side of connect by ID (Plan step 14, TRD › Connect by ID): on each Incoming it works out the path
 /// with the <see cref="Connector"/> on the rendezvous half of the shared socket, while the session keeps running on
-/// the other half (<see cref="PacketMux.Session"/>). A TCP relay path is joined to that same session. It also keeps
-/// the server's view of this PC's UDP address fresh. One viewer's path at a time.
+/// the other half (<see cref="PacketMux.Session"/>). A TCP relay path is joined to that same session. A relay the
+/// viewer asks for after this PC took a direct path is joined too (TRD › Direct handshake check). It also keeps the
+/// server's view of this PC's UDP address fresh. One viewer's path at a time.
 /// </summary>
 public sealed class HostRendezvous : IDisposable
 {
@@ -19,8 +20,10 @@ public sealed class HostRendezvous : IDisposable
     private readonly SemaphoreSlim _oneAtATime = new(1, 1);
     private readonly CancellationTokenSource _closing = new();
     private readonly Timer _keepAlive;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, PeerInfo> _callers = new();
     private TcpRelayTransport? _tcp;
     private Thread? _tcpPump;
+    private volatile string? _accepting;
 
     public HostRendezvous(RendezvousClient client, PacketMux mux, IPEndPoint serverUdp, ConnectTimings? timings = null)
     {
@@ -29,6 +32,7 @@ public sealed class HostRendezvous : IDisposable
         _serverUdp = serverUdp;
         Connector = new Connector(client, mux.Rendezvous, serverUdp, timings);
         _client.Incoming += OnIncoming;
+        _client.RelayAsked += OnRelayAsked;
         _keepAlive = new Timer(_ => KeepAlive(), null, KeepAliveEvery, KeepAliveEvery);
     }
 
@@ -55,7 +59,47 @@ public sealed class HostRendezvous : IDisposable
         }
     }
 
-    private void OnIncoming(PeerInfo caller) => _ = AcceptAsync(caller);
+    private void OnIncoming(PeerInfo caller)
+    {
+        _callers[Convert.ToHexString(caller.ConnectId)] = caller;
+        _ = AcceptAsync(caller);
+    }
+
+    /// <summary>The viewer asks for the relay. While its path is being worked out, the connector takes it; after, join here.</summary>
+    private void OnRelayAsked(byte[] connectId)
+    {
+        string key = Convert.ToHexString(connectId);
+        if (_accepting != key && _callers.TryGetValue(key, out var caller)) _ = JoinLateAsync(caller);
+    }
+
+    private async Task JoinLateAsync(PeerInfo caller)
+    {
+        try
+        {
+            await _oneAtATime.WaitAsync(_closing.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        try
+        {
+            // The connector may have taken the request meanwhile, while working out a new path for this viewer.
+            if (!Connector.TakeRelayRequest(caller.ConnectId)) return;
+            _mux.Rendezvous.Clear();
+            var path = await Connector.JoinRelayAsHostAsync(caller.ConnectId, _closing.Token).ConfigureAwait(false);
+            if (path.Transport is TcpRelayTransport tcp) UseTcpRelay(tcp);
+            PathFound?.Invoke(caller, path.Kind, path.Remote);
+        }
+        catch (Exception error) when (error is TimeoutException or IOException or OperationCanceledException or ObjectDisposedException)
+        {
+            if (!_closing.IsCancellationRequested) PathFailed?.Invoke(caller, error);
+        }
+        finally
+        {
+            _oneAtATime.Release();
+        }
+    }
 
     private async Task AcceptAsync(PeerInfo caller)
     {
@@ -71,6 +115,7 @@ public sealed class HostRendezvous : IDisposable
         {
             // Old answers and Hellos say nothing about this viewer.
             _mux.Rendezvous.Clear();
+            _accepting = Convert.ToHexString(caller.ConnectId);
             _mux.CopyHelloToRendezvous = true;
             var path = await Connector.AcceptAsync(caller, _closing.Token).ConfigureAwait(false);
             if (path.Transport is TcpRelayTransport tcp) UseTcpRelay(tcp);
@@ -83,8 +128,18 @@ public sealed class HostRendezvous : IDisposable
         finally
         {
             _mux.CopyHelloToRendezvous = false;
+            _accepting = null;
             _oneAtATime.Release();
+            // A relay asked for while the path was worked out but not taken by it is joined now.
+            if (Connector.TakeRelayRequest(caller.ConnectId)) OnRelayAskedAgain(caller);
         }
+    }
+
+    private void OnRelayAskedAgain(PeerInfo caller)
+    {
+        // Put the request back for JoinLateAsync, which takes it under the one-at-a-time lock.
+        Connector.AddRelayRequest(caller.ConnectId);
+        _ = JoinLateAsync(caller);
     }
 
     /// <summary>The TCP relay joins the session: its packets come in beside the UDP ones; packets to it go over TLS.</summary>
@@ -127,6 +182,7 @@ public sealed class HostRendezvous : IDisposable
     {
         _closing.Cancel();
         _client.Incoming -= OnIncoming;
+        _client.RelayAsked -= OnRelayAsked;
         _keepAlive.Dispose();
         Interlocked.Exchange(ref _tcp, null)?.Dispose();
         _tcpPump?.Join(TimeSpan.FromSeconds(1));

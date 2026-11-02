@@ -82,11 +82,11 @@ public class ConnectByIdTests : IAsyncLifetime
     /// A viewer at <paramref name="site"/> connects to <paramref name="host"/> by ID with the fixed password; once let in,
     /// the remote PC sends frames. Returns the viewer's path, and the remote PC's.
     /// </summary>
-    private async Task<(PathKind Viewer, PathKind Host)> ViewById(Host host, SimSite site, string lan)
+    /// <param name="afterPath">Runs once the viewer has its path, before the session: to break the network then.</param>
+    private async Task<(PathKind Viewer, PathKind Host)> ViewById(Host host, SimSite site, string lan, Action? afterPath = null)
     {
-        var hostPath = new TaskCompletionSource<PathKind>(TaskCreationOptions.RunContinuationsAsynchronously);
-        host.Rendezvous.PathFound += (_, kind, _) => hostPath.TrySetResult(kind);
-        host.Rendezvous.PathFailed += (_, error) => hostPath.TrySetException(error);
+        var hostPaths = new ConcurrentQueue<PathKind>();
+        host.Rendezvous.PathFound += (_, kind, _) => hostPaths.Enqueue(kind);
 
         var key = Own(DeviceKey.Create());
         var udp = Own(_net.Bind(site, new IPEndPoint(IPAddress.Parse(lan), 50000)));
@@ -99,8 +99,21 @@ public class ConnectByIdTests : IAsyncLifetime
         var peer = Assert.IsType<PeerInfo>(found.Peer);
         var path = await connector.ConnectAsync(peer);
         if (path.Transport is TcpRelayTransport tcp) Own(tcp);
+        afterPath?.Invoke();
         var link = Own(Link.Viewer(key, path.Transport, path.Remote, Quick));
         var access = Own(new ViewerAccess(link, Unattended, peer.PublicKey));
+
+        // As the viewer window does: a direct path must finish its handshake in time, or the relay takes over.
+        if (path.Kind == PathKind.Direct && !Within(() => link.Snapshot().State == LinkState.Connected,
+                (int)ConnectTimings.Default.HandshakeWait.TotalMilliseconds))
+        {
+            access.Dispose();
+            link.Dispose();
+            path = await connector.RelayAsync(peer);
+            if (path.Transport is TcpRelayTransport relay) Own(relay);
+            link = Own(Link.Viewer(key, path.Transport, path.Remote, Quick));
+            access = Own(new ViewerAccess(link, Unattended, peer.PublicKey));
+        }
         var frames = new ConcurrentQueue<AssembledFrame>();
         link.FrameReceived += frames.Enqueue;
 
@@ -117,7 +130,8 @@ public class ConnectByIdTests : IAsyncLifetime
         }
         Assert.True(Within(() => frames.Count == sent.Count), $"{frames.Count} of {sent.Count} frames");
         Assert.Equal(sent, frames.Select(f => f.Data));
-        return (path.Kind, await hostPath.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.True(Within(() => !hostPaths.IsEmpty), "the remote PC found no path");
+        return (path.Kind, hostPaths.Last());
     }
 
     private static bool Within(Func<bool> condition, int ms = 10_000)
@@ -172,6 +186,48 @@ public class ConnectByIdTests : IAsyncLifetime
         var host = await StartHost(office, "10.0.0.8");
 
         Assert.Equal((PathKind.TcpRelay, PathKind.TcpRelay), await ViewById(host, home, "192.168.1.20"));
+    }
+
+    [Fact]
+    public async Task A_path_that_works_one_way_only_is_not_taken_the_relay_is()
+    {
+        var (home, office) = Sites();
+        // The remote PC's punches reach the viewer, but nothing from the viewer reaches the remote PC directly.
+        _net.BlockOneWay(home, office);
+        var host = await StartHost(office, "10.0.0.8");
+
+        Assert.Equal((PathKind.Relay, PathKind.Relay), await ViewById(host, home, "192.168.1.20"));
+    }
+
+    [Fact]
+    public async Task The_viewer_does_not_choose_a_direct_path_that_only_answers_one_way()
+    {
+        var (home, office) = Sites();
+        _net.BlockOneWay(home, office);
+        var host = await StartHost(office, "10.0.0.8");
+        using var key = DeviceKey.Create();
+        var udp = Own(_net.Bind(home, new IPEndPoint(IPAddress.Parse("192.168.1.20"), 50000)));
+        var client = await Register(key, udp.LocalEndPoint);
+        _clients.Add(client);
+        var connector = new Connector(client, udp, ServerUdp);
+        await connector.CheckAddressAsync();
+
+        // The remote PC's punches arrive, but the viewer's never do: no Punch ack, so no direct path.
+        var path = await connector.ConnectAsync((await client.FindAsync(host.Client.Id)).Peer!);
+
+        Assert.Equal(PathKind.Relay, path.Kind);
+    }
+
+    [Fact]
+    public async Task When_the_direct_handshake_does_not_finish_the_viewer_falls_back_to_the_relay()
+    {
+        var (home, office) = Sites();
+        var host = await StartHost(office, "10.0.0.8");
+
+        // Punching worked both ways; then the way back breaks, so the remote PC's Welcome never arrives.
+        var (viewer, hostPath) = await ViewById(host, home, "192.168.1.20", afterPath: () => _net.BlockOneWay(office, home));
+
+        Assert.Equal((PathKind.Relay, PathKind.Relay), (viewer, hostPath));
     }
 
     [Fact]
