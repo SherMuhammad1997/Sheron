@@ -85,13 +85,14 @@ File transfer, clipboard sync, chat, sound, session recording, more than one mon
 | 1 Nov | Home screen: layout 3 "Address bar" from the 10 layouts (`docs/design/LayoutsAndLogos.html`): partner ID, password and Connect in one line at the top; this PC's ID and one-time password below on the left, Recent on the right (Sher). Built in Plan step 15 |
 | 1 Nov | Logo: idea 10 "Wordmark", the name with its o drawn as a small screen (Sher). Drawn for the working name; redrawn if the product name changes (open decision 6) |
 | 1 Nov | Server: Oracle Cloud (Always Free) with Oracle Linux 9, the free CentOS-family system (CentOS Linux itself gets no more security updates). Replaces Alibaba Cloud Hong Kong from 25 Oct. Region chosen at sign-up; Singapore recommended (202 ms average in the 25 Oct test, the best measured) (Sher) |
+| 2 Nov | Server while the app matures: Oracle Cloud Always Free only, kept simple and free; a paid server once Sheron is mature and tested. No domain for now: the app reaches the server by its IP address (open decision 3 moves to release) (Sher) |
 | 1 Nov | Testing on a second PC uses one self-contained `Sheron.exe`: copy it over and double-click, no install, no .NET, no GitHub account on that PC. Until the home screen (Plan step 15) it opens a small start window: "Share this screen" or "View a PC" by IP address |
 
 ## Decisions still open — ask Sher
 
 | # | Question | Needed before |
 | --- | --- | --- |
-| 3 | Domain name for the server | Step 13 |
+| 3 | Domain name for the server (none while testing, 2 Nov) | Release |
 | 4 | Installer tool: Inno Setup proposed | Step 19 |
 | 5 | Code-signing certificate: standard or EV | Step 20 |
 | 6 | Product name | Release |

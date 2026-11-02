@@ -14,6 +14,18 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-11-02 — Oracle Cloud: "Out of capacity", "Too many requests", "Request not completed within 20000 ms"  (Plan step 13)
+Symptom:     Creating the server machine in Singapore failed with "Out of capacity for shape VM.Standard.A1.Flex in availability domain AD-1" (and the same for VM.Standard.E2.1.Micro); clicking Create again soon gave "Too many requests for the user"; one try gave "Request not completed within 20000 ms", and oracle.com would not load for a while.
+Root cause:  Oracle's free machines in a region are shared by everyone; when none is spare, Create fails until someone frees one. Many clicks in a short time are throttled. The 20-second message only means the console stopped waiting: the request may still go through.
+Exact fix:   After a timeout, first look at Compute → Instances (region Singapore) before creating again, so there are never two machines. Then try Create once every 30 minutes or so; try the small AMD shape (VM.Standard.E2.1.Micro) when Ampere (A1.Flex) is full. On 2 Nov the E2.1.Micro try went through. Paid shapes (E4.Flex, E5.Flex) on the trial credit work at once but stop when the 30-day trial ends.
+Files:       none (Oracle console)
+
+### 2026-11-02 — A file sent through the chat never reached Sher's PC  (Plan step 13)
+Symptom:     The server package sent as a file card in the chat was not in Downloads or anywhere under the user folder; scp said "No such file or directory".
+Root cause:  The file was not saved from the chat on Sher's PC (the card may not download there). Large files that do arrive can also be cut short (see the damaged exe entry below).
+Exact fix:   Build on Sher's own laptop from the repository instead of sending files: `git pull`, then `dotnet publish src\Sheron.Server -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -p:DebugType=none -o "$env:USERPROFILE\sheron-publish\server-linux-x64"`, then copy `Sheron.Server`, `deploy\install.sh` and `deploy\sheron-server.service` to the server with `scp -C` and run `sudo bash sheron-server/install.sh` there. `.gitattributes` keeps `*.sh` and `*.service` in Linux line endings on Windows; the copy command also strips any Windows line endings on the server.
+Files:       `.gitattributes`, `deploy/install.sh`, `deploy/sheron-server.service`
+
 ### 2026-11-02 — Viewer stuck on "Connecting…" to 192.168.56.1  (Plan step 16)
 Symptom:     Viewing Sher's PC from the second laptop stayed on "Connecting to 192.168.56.1:47920 …", and Sher's PC never showed a request.
 Root cause:  192.168.56.1 is VirtualBox's private network on Sher's PC, which the other laptop cannot reach. The sharing window listed every address in Windows' adapter order (VirtualBox and other virtual adapters first) and the row was cut off with "…", so the Wi-Fi address (172.20.10.x on the iPhone hotspot) was hidden.

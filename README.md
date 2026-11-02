@@ -2,9 +2,9 @@
 
 Simple, fast remote desktop for Windows. Connect to any PC in the world with a 9-digit ID and a password, see its screen and control it.
 
-Status: Implementation Plan step 16 (one-time and fixed passwords, DPAPI secrets, 3 tries then 30 s lock, Accept or Deny) done: PRD A3 and A9 passed on Sher's two laptops on 2 Nov. Step 12 (address check, hole punching, relay, TCP 443) done through the network simulator. Order from 1 Nov: 13 (deploy on Oracle Cloud, Oracle Linux 9), 14, then 10.
+Status: Implementation Plan step 13 done on 2 Nov: the server runs on Oracle Cloud (Always Free, Singapore, 168.138.174.180) as a systemd service, and Sher's laptop registered with it. Step 16 (passwords) done: PRD A3 and A9 passed on Sher's two laptops. Step 12 (address check, hole punching, relay, TCP 443) done through the network simulator. Next: 14 (connect by ID over the internet), then 10.
 
-Server: `dotnet run --project src/Sheron.Server -- --port 443 --data <folder>` (TCP and UDP on that port); it prints the pin the app checks.
+Server: `dotnet run --project src/Sheron.Server -- --port 443 --data <folder>` (TCP and UDP on that port); it prints the pin the app checks. On Oracle Linux 9: the files in `deploy/` (TRD › Server › Deployment).
 
 One-file test build (PRD decision 1 Nov): `dotnet publish src/Sheron.Win -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:EnableCompressionInSingleFile=true -o <folder>`, then rename `Sheron.Win.exe` to `Sheron.exe`. Copy it to any 64-bit Windows 10/11 PC and double-click: "Share this screen" on the PC to be viewed, "View a PC" with its IP address on the other.
 
