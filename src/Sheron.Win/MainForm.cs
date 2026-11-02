@@ -1,12 +1,13 @@
 using System.Net;
 using Sheron.Core;
+using Sheron.Core.Rendezvous;
 using Sheron.Core.Session;
 
 namespace Sheron.Win;
 
 /// <summary>
 /// Start window until the home screen is built (Plan step 15; PRD decision 1 Nov): "Share this screen" or "View a PC"
-/// by IP address and password. The choices are drawn on the form; the IP and password boxes are the only real
+/// by its ID (through the Sheron server, Plan step 14) or IP address, and password. The choices are drawn on the form; the IP and password boxes are the only real
 /// controls (CLAUDE.md › Windows UI). Closing a viewer window comes back here.
 /// </summary>
 internal sealed class MainForm : Form
@@ -21,7 +22,7 @@ internal sealed class MainForm : Form
     private static readonly Color Bad = Color.FromArgb(0xE5, 0x53, 0x4B);
     private const TextFormatFlags Wrapped = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix;
 
-    private readonly TextBox _address = new() { BorderStyle = BorderStyle.FixedSingle, PlaceholderText = "IP, such as 192.168.1.20" };
+    private readonly TextBox _address = new() { BorderStyle = BorderStyle.FixedSingle, PlaceholderText = "ID, or IP address" };
     // The password is never put on the command line, where other programs can read it (TRD › Connect by IP).
     private readonly TextBox _password = new() { BorderStyle = BorderStyle.FixedSingle, PlaceholderText = "Password", UseSystemPasswordChar = true };
     private readonly bool _hardwareDecoder;
@@ -34,7 +35,7 @@ internal sealed class MainForm : Form
     private Rectangle? _hover;
     private string? _problem;
 
-    /// <param name="address">An IP address to fill in (from <c>--view</c>); the password is then typed.</param>
+    /// <param name="address">An ID or IP address to fill in (from <c>--view</c>); the password is then typed.</param>
     public MainForm(string? address = null, bool hardwareDecoder = true)
     {
         _hardwareDecoder = hardwareDecoder;
@@ -94,7 +95,7 @@ internal sealed class MainForm : Form
         int width = ClientSize.Width - 2 * margin;
 
         TextRenderer.DrawText(g, AppInfo.Name, _titleFont, new Point(margin, LogicalToDeviceUnits(20)), Accent);
-        TextRenderer.DrawText(g, "Test version · same network only", _textFont,
+        TextRenderer.DrawText(g, "Test version · by ID over the internet, or by IP on the same network", _textFont,
             new Point(margin, LogicalToDeviceUnits(56)), Muted);
 
         DrawButton(g, _shareButton, "Share this screen");
@@ -102,7 +103,7 @@ internal sealed class MainForm : Form
             Rectangle.Inflate(new Rectangle(_shareButton.Left, _shareButton.Top + _shareButton.Height / 2, _shareButton.Width, _shareButton.Height / 2), -LogicalToDeviceUnits(16), 0),
             Muted, Wrapped);
 
-        TextRenderer.DrawText(g, "View a PC: type the IP address and password its sharing window shows", _textFont,
+        TextRenderer.DrawText(g, "View a PC: type the ID (or IP address) and password its sharing window shows", _textFont,
             new Point(margin, _address.Top - LogicalToDeviceUnits(28)), Ink);
         DrawButton(g, _viewButton, "View");
 
@@ -145,13 +146,16 @@ internal sealed class MainForm : Form
 
     private void View()
     {
-        if (!IPEndPoint.TryParse(_address.Text.Trim(), out var remote) || remote.Address.Equals(IPAddress.Any))
+        string typed = _address.Text.Trim();
+        bool byId = RendezvousWire.TryParseId(typed, out uint id);
+        IPEndPoint? remote = null;
+        if (!byId && (!IPEndPoint.TryParse(typed, out remote) || remote.Address.Equals(IPAddress.Any)))
         {
-            _problem = $"\"{_address.Text.Trim()}\" is not an IP address. Type it as the sharing window shows it, such as 192.168.1.20.";
+            _problem = $"\"{typed}\" is neither a 9-digit ID nor an IP address. Type it as the sharing window shows it, such as 713 152 388.";
             Invalidate();
             return;
         }
-        if (remote.Port == 0) remote.Port = Link.DefaultPort;
+        if (remote is { Port: 0 }) remote.Port = Link.DefaultPort;
         if (_password.Text.Length == 0)
         {
             _problem = "Type the password the sharing window shows.";
@@ -167,7 +171,7 @@ internal sealed class MainForm : Form
         }
 
         _problem = null;
-        var viewer = new ViewerTestForm(remote, _password.Text, _hardwareDecoder);
+        var viewer = byId ? new ViewerTestForm(id, _password.Text, _hardwareDecoder) : new ViewerTestForm(remote!, _password.Text, _hardwareDecoder);
         _password.Clear();
         // Closing the viewer comes back here, to try again or view another PC.
         viewer.FormClosed += (_, _) =>

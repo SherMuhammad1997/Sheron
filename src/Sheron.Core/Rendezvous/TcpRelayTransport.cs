@@ -8,7 +8,8 @@ namespace Sheron.Core.Rendezvous;
 /// <summary>
 /// The TCP 443 relay as a packet transport, for a PC whose UDP is blocked (TRD › Server › Direct link, relay and TCP
 /// fallback): each packet goes to the server inside one Relay data message on the TLS link, and the server forwards
-/// it to the other PC. Every packet comes from, and goes to, <see cref="Peer"/>. Packets wait in a queue of
+/// it to the other PC. Every packet comes from, and goes to, <see cref="Peer"/>: the server's IP with port 0, so it
+/// is never taken for the server's UDP address (TRD › Connect by ID › TCP relay on the remote PC). Packets wait in a queue of
 /// <see cref="QueueLength"/>; when the link cannot keep up, new ones are dropped, as a full network would.
 /// </summary>
 public sealed class TcpRelayTransport : IPacketTransport, IDisposable
@@ -26,7 +27,7 @@ public sealed class TcpRelayTransport : IPacketTransport, IDisposable
     internal TcpRelayTransport(RendezvousClient client)
     {
         _client = client;
-        Peer = client.ServerEndPoint;
+        Peer = new IPEndPoint(client.ServerEndPoint.Address, 0);
         _sending = SendLoop();
     }
 

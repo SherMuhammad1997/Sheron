@@ -227,20 +227,25 @@ public sealed class HostAccess : IDisposable
 
 /// <summary>
 /// The viewer's side (Plan step 16): sends the password once the session is up, and hears the remote PC's answer.
-/// <see cref="TryAgain"/> sends another password in the same session after a wrong one.
+/// <see cref="TryAgain"/> sends another password in the same session after a wrong one. With connect by ID (Plan step
+/// 14) the remote PC's key from the server is checked first: a different key gets no password.
 /// </summary>
 public sealed class ViewerAccess : IDisposable
 {
     private readonly Link _link;
+    private readonly byte[]? _expectedFingerprint;
     private readonly object _lock = new();
     private string _password;
     private bool _sent;
     private AccessAnswer? _answer;
+    private volatile bool _wrongKey;
 
-    public ViewerAccess(Link link, string password)
+    /// <param name="expectedHostKey">The remote PC's device public key as the server gave it; null for connect by IP.</param>
+    public ViewerAccess(Link link, string password, byte[]? expectedHostKey = null)
     {
         _link = link;
         _password = password;
+        _expectedFingerprint = expectedHostKey is null ? null : KeyFingerprint.Of(expectedHostKey);
         _link.Connected += Send;
         _link.ControlReceived += OnControl;
         // The session may already be up.
@@ -257,6 +262,12 @@ public sealed class ViewerAccess : IDisposable
     }
 
     public bool IsLetIn => Answer?.Result == AccessResult.LetIn;
+
+    /// <summary>The session's remote key is not the one the server gave for that ID: no password was sent.</summary>
+    public bool WrongHostKey => _wrongKey;
+
+    /// <summary>The remote key did not match: stop the session and warn.</summary>
+    public event Action? HostKeyMismatch;
 
     /// <summary>An answer came: on the link's thread.</summary>
     public event Action<AccessAnswer>? Answered;
@@ -275,6 +286,20 @@ public sealed class ViewerAccess : IDisposable
 
     private void Send()
     {
+        if (_expectedFingerprint is not null)
+        {
+            var actual = _link.Snapshot().PeerFingerprint;
+            if (actual is null) return;
+            if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(actual, _expectedFingerprint))
+            {
+                if (!_wrongKey)
+                {
+                    _wrongKey = true;
+                    HostKeyMismatch?.Invoke();
+                }
+                return;
+            }
+        }
         string password;
         lock (_lock)
         {

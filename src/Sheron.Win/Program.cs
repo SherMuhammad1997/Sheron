@@ -10,7 +10,7 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
         // Developer windows instead of the app: --capture-test for Plan steps 3–4, --loop-test for step 5,
-        // --host [--port N] for step 8, and --view <IP>[:port], which fills in the start window (the password is typed
+        // --host [--port N] for step 8, and --view <ID or IP>, which fills in the start window (the password is typed
         // there, never given on the command line), and --server <IP>[:port] --pin <pin> for step 13 (register with the
         // server). --software-encoder and --software-decoder skip the hardware routes.
         bool hardwareEncoder = !args.Contains("--software-encoder");
@@ -36,8 +36,8 @@ internal static class Program
     private static Form? ViewerForm(string[] args, bool hardwareDecoder)
     {
         string? text = ValueAfter(args, "--view");
-        if (text is null || !IPEndPoint.TryParse(text, out var remote))
-            return Refuse("Give the remote PC's address after --view, such as --view 192.168.1.20 or --view 192.168.1.20:47920.");
+        if (text is null || (!Core.Rendezvous.RendezvousWire.TryParseId(text, out _) && !IPEndPoint.TryParse(text, out _)))
+            return Refuse("Give the remote PC's ID or address after --view, such as --view 713152388 or --view 192.168.1.20.");
         return new MainForm(text, hardwareDecoder);
     }
 

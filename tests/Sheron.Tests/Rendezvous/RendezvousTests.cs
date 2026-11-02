@@ -162,6 +162,20 @@ public class RendezvousTests : IDisposable
         Assert.Equal("482 917 365", RendezvousWire.Show(482_917_365));
     }
 
+    [Theory]
+    [InlineData("713 152 388", 713_152_388u)]
+    [InlineData("713152388", 713_152_388u)]
+    [InlineData(" 713-152-388 ", 713_152_388u)]
+    [InlineData("71315238", null)]       // 8 digits
+    [InlineData("099 999 999", null)]    // below the first ID
+    [InlineData("192.168.1.20", null)]   // an address, not an ID
+    [InlineData("71315238x", null)]
+    public void An_ID_is_typed_with_or_without_its_spaces(string typed, uint? id)
+    {
+        Assert.Equal(id is not null, RendezvousWire.TryParseId(typed, out uint parsed));
+        if (id is { } expected) Assert.Equal(expected, parsed);
+    }
+
     public void Dispose()
     {
         _certificate.Dispose();

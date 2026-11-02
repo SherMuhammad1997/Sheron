@@ -439,6 +439,21 @@ Each PC has one UDP socket for everything: address check, punching, relay and th
 
 Plan step 12 check: through the simulator, two PCs at different sites connect directly; with the direct path blocked they connect through the UDP relay; with one side's UDP blocked they connect through the TCP 443 relay; in each case a session runs (video frames and control messages arrive).
 
+### Connect by ID (Plan step 14)
+
+| Item | Rule |
+| --- | --- |
+| Server | The app is built with the server's address and pin (TRD › Deployment: 168.138.174.180, TCP and UDP 443). The settings screen (Plan step 15) can change the address |
+| Remote PC | The sharing window opens its UDP socket (47920), registers with the server (this PC's ID shows), runs the address check, and keeps the server's view of its UDP address fresh with an address check every 25 s. A lost server link is tried again every 10 s. Connect by IP keeps working on the same socket |
+| One socket, two readers | On the remote PC one thread reads the socket and hands each packet on by its first byte: rendezvous messages (0x30–0x35) to the connector, everything else to the session. While the connector is finding a path it also gets a copy of each Hello, to tell direct from relay. The session (Plan step 8 link) runs all the time, so a Hello on any path finds it. Only one viewer's path is worked out at a time |
+| TCP relay on the remote PC | When its UDP is blocked, the TCP relay is joined to the same session: packets from the relay come in beside the UDP ones, and packets to the relay's address go out over TLS. The relay's address is the server's IP with port 0, so it never mixes with the server's UDP address |
+| Viewer | "View a PC" with a 9-digit ID: the viewer window opens its own UDP socket, registers, runs the address check, finds the ID, works out the path (direct, relay, TCP 443), then starts the session on it. Unknown ID, offline, or too many tries are shown as such |
+| Remote PC's key | The server gives the remote PC's device key with Found. The viewer checks the session handshake's key against it before sending the password; a different key stops the session with a warning, and the password is never sent |
+| Path shown | Both windows show the path: Direct (with the address), Relay through the server, or TCP 443 relay. This is what PRD A2 and the step 14 check look at; the toolbar of Plan step 15 shows it the same way |
+| One registration per PC | A PC registers once; a second window registering the same PC replaces the first. So the sharing window and a viewer window are not open together on one PC |
+
+Plan step 14 check: Sher's laptop on the iPhone hotspot connects by ID to a second PC on another network; both windows show Direct or Relay.
+
 ## Risks
 
 | # | Risk | What we do |

@@ -102,6 +102,14 @@ public static class RendezvousWire
 
     public static bool IsId(uint id) => id is >= FirstId and <= LastId;
 
+    /// <summary>An ID as typed: 9 digits, with or without the spaces it is shown with (or dashes).</summary>
+    public static bool TryParseId(string text, out uint id)
+    {
+        id = 0;
+        string digits = new([.. text.Where(c => c is not (' ' or '-'))]);
+        return digits.Length == 9 && digits.All(char.IsAsciiDigit) && uint.TryParse(digits, out id) && IsId(id);
+    }
+
     /// <summary>The pin of a server certificate: SHA-256 of its public key (SubjectPublicKeyInfo).</summary>
     public static byte[] Pin(X509Certificate certificate)
     {
