@@ -131,7 +131,7 @@ public class BadNetworkSessionTests(ITestOutputHelper output)
         var h = host.Snapshot();
         double medianDelay = delays.Count == 0 ? double.NaN : delays.OrderBy(d => d).ElementAt(delays.Count / 2);
         output.WriteLine($"Shown {times.Count} frames in {Run.TotalSeconds:0} s ({times.Count / Run.TotalSeconds:0.0} fps); longest gap {longest.TotalMilliseconds:0} ms");
-        output.WriteLine($"Frames sent {h.FramesSent}, lost after repair {v.LostFrames} (hold ran out {v.GaveUp} times), keyframes asked {keyFramesAsked}, shards rebuilt {v.RebuiltShards}");
+        output.WriteLine($"Frames sent {h.FramesSent}, lost after repair {v.LostFrames} (hold ran out {v.GaveUp} times), keyframes asked {keyFramesAsked} + {v.EarlyKeyFrameAsks} early, shards rebuilt {v.RebuiltShards}");
         output.WriteLine($"Packet loss measured {v.PacketLoss:P1} (reported to the remote PC: {h.PacketLoss:P1}); jitter {v.JitterMs} ms; hold {v.HoldTime.TotalMilliseconds:0} ms; queue {v.QueueMs} ms");
         output.WriteLine($"Capture → shown, median {medianDelay:0} ms over {delays.Count} frames (clock matched: {v.ClockKnown}); round trip {h.RoundTrip?.TotalMilliseconds:0} ms");
         output.WriteLine($"Input: {inputsIn} of {inputsOut}, {inputsOutOfOrder} out of order");

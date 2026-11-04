@@ -44,7 +44,8 @@ public sealed record LinkSnapshot(
     TimeSpan HoldTime = default,
     bool ClockKnown = false,
     LinkReport? LastReport = null,
-    int GaveUp = 0);
+    int GaveUp = 0,
+    int EarlyKeyFrameAsks = 0);
 
 /// <summary>
 /// One side of a direct link between two PCs over UDP (TRD › Connect by IP): the session handshake with retries,
@@ -83,6 +84,8 @@ public sealed class Link : IDisposable
     private TimeSpan _lastReport, _lastProbe;
     private (ulong Highest, long Opened, int Frames, int Lost, long Bytes) _reportBase;
     private double _packetLoss;
+    private int _askedForHold, _asksThisHold;
+    private int _earlyKeyFrameAsks;
     private readonly Queue<(uint Expected, uint Received)> _lossWindow = new();
     private LinkReport? _lastReportIn;
     private TimeSpan _lastHeard;
@@ -171,7 +174,7 @@ public sealed class Link : IDisposable
                 _reliableOut.RoundTrip, _reliableOut.Resends, _refused + (_session?.Refused ?? 0),
                 _packetLoss, _isHost ? _lastReportIn?.QueueMs ?? 0 : _delays.QueueMs(now),
                 _isHost ? _lastReportIn?.JitterMs ?? 0 : _delays.JitterMs(now), _assembler.HoldTime,
-                _clockSync.Offset is not null, _lastReportIn, _assembler.GaveUp);
+                _clockSync.Offset is not null, _lastReportIn, _assembler.GaveUp, _earlyKeyFrameAsks);
         }
     }
 
@@ -475,7 +478,21 @@ public sealed class Link : IDisposable
                 }
                 if (!_isHost)
                 {
-                    _assembler.Expire(Stopwatch.GetTimestamp(), _released);
+                    long ts = Stopwatch.GetTimestamp();
+                    // A frame missing for longer than the jitter is probably lost: ask for a keyframe now, while the
+                    // waiting frames still wait for it (TRD › Jitter buffer), instead of after the whole hold.
+                    // Asked twice, after one and two jitters, in separate packets: a lost request would otherwise wait
+                    // for its resend, about a round trip and more on a slow link.
+                    var jitter = TimeSpan.FromMilliseconds(Math.Max(20, _delays.JitterMs(Micros.From(ts))));
+                    if (_assembler.HoldNumber != _askedForHold) (_askedForHold, _asksThisHold) = (_assembler.HoldNumber, 0);
+                    if (_assembler.Held > 0 && _asksThisHold < 2 && _assembler.HeldFor(ts) >= jitter * (_asksThisHold + 1))
+                    {
+                        _asksThisHold++;
+                        _earlyKeyFrameAsks++;
+                        _reliableOut.Send(ControlMessage.KeyFrameRequest());
+                        FlushReliable(now);
+                    }
+                    _assembler.Expire(ts, _released);
                     Deliver(raise);
                     if (_heardSealed) Report(now);
                 }

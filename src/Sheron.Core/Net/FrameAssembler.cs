@@ -39,6 +39,12 @@ public sealed class FrameAssembler
     /// <summary>Frames waiting for an earlier one.</summary>
     public int Held => _held.Count;
 
+    /// <summary>Counts the waits: a new number each time frames start waiting for a missing one.</summary>
+    public int HoldNumber { get; private set; }
+
+    /// <summary>How long the frames now waiting have waited; zero when none is waiting.</summary>
+    public TimeSpan HeldFor(long now) => _held.Count == 0 ? TimeSpan.Zero : System.Diagnostics.Stopwatch.GetElapsedTime(_heldSince, now);
+
     /// <summary>Takes one video packet with no hold time; returns the frame it completes, if any.</summary>
     public AssembledFrame? Add(ReadOnlySpan<byte> packet)
     {
@@ -91,7 +97,11 @@ public sealed class FrameAssembler
             Release(whole, output);
             return;
         }
-        if (_held.Count == 0) _heldSince = now;
+        if (_held.Count == 0)
+        {
+            _heldSince = now;
+            HoldNumber++;
+        }
         _held[h.Frame] = whole;
     }
 
@@ -102,7 +112,11 @@ public sealed class FrameAssembler
         if (System.Diagnostics.Stopwatch.GetElapsedTime(_heldSince, now) < HoldTime) return;
         GaveUp++;
         Release(_held[Oldest(_held.Keys)], output);
-        if (_held.Count > 0) _heldSince = now;   // the next gap gets its own hold time
+        if (_held.Count > 0)
+        {
+            _heldSince = now;   // the next gap gets its own hold time
+            HoldNumber++;
+        }
     }
 
     /// <summary>Hands on <paramref name="frame"/> (anything skipped is lost), then every waiting frame that follows it.</summary>
