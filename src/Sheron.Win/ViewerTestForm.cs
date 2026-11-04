@@ -66,7 +66,7 @@ internal sealed class ViewerTestForm : DevForm
     /// <summary>Connect by IP on the same network (Plan step 8).</summary>
     public ViewerTestForm(IPEndPoint remote, string password, bool allowHardwareDecoder = true)
         : base($"viewing {remote} (developer)", $"Viewing {remote} · by IP · click the picture to control",
-            new Size(960, 744), headerHeight: 228, rowsPerColumn: 7, withVideo: true)
+            new Size(1040, 768), headerHeight: 252, rowsPerColumn: 7, withVideo: true)
     {
         _remote = remote;
         _password = password;
@@ -76,7 +76,7 @@ internal sealed class ViewerTestForm : DevForm
     /// <summary>Connect by ID through the Sheron server (Plan step 14).</summary>
     public ViewerTestForm(uint id, string password, bool allowHardwareDecoder = true)
         : base($"viewing {RendezvousWire.Show(id)} (developer)", $"Viewing {RendezvousWire.Show(id)} · by ID · click the picture to control",
-            new Size(960, 744), headerHeight: 228, rowsPerColumn: 7, withVideo: true)
+            new Size(1040, 768), headerHeight: 252, rowsPerColumn: 7, withVideo: true)
     {
         _id = id;
         _password = password;
@@ -426,6 +426,9 @@ internal sealed class ViewerTestForm : DevForm
         yield return (_timedFromCapture ? "Delay" : "Arrived → shown",
             t.FramesPerSecond > 0 ? $"avg {t.AverageMs:0.0} · max {t.MaxMs:0.0} ms" + (_timedFromCapture ? " (capture → shown)" : "") : "–",
             _timedFromCapture ? Accent : null);
+        // Where the delay goes (PRD A7): before arrival (remote PC + network), then decode, draw and the wait for the screen.
+        if (_timedFromCapture && t.FramesPerSecond > 0)
+            yield return ("Delay parts", $"remote PC + network {t.EncodeMs:0.0} · decode {t.DecodeMs:0.0} · draw {t.DrawMs:0.0} · screen {t.PresentMs + t.ScreenMs:0.0} ms", null);
         int asked;
         lock (_formatLock) asked = _keyFramesAsked;
         yield return ("Lost frames", $"{l.LostFrames} · keyframes asked {asked} · shards rebuilt {l.RebuiltShards}", l.LostFrames > 0 ? Bad : null);
