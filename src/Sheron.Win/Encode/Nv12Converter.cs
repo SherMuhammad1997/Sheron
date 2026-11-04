@@ -50,9 +50,11 @@ internal sealed class Nv12Converter : IDisposable
         // Screen pixels are full-range RGB; the video is BT.709 YUV in the 16–235 range.
         _videoContext.VideoProcessorSetStreamColorSpace(_processor, 0, new VideoProcessorColorSpace { RGB_Range = 0 });
         _videoContext.VideoProcessorSetOutputColorSpace(_processor, new VideoProcessorColorSpace { YCbCr_Matrix = 1, Nominal_Range = 1 });
-        // Same size in and out for now; an odd last column or row of the screen is left out.
+        // The whole screen (an odd last column or row left out) scaled to the encoder's size: the same at 100 %, smaller
+        // when automatic quality lowers the picture size (Plan step 10).
+        var screen = new RawRect(0, 0, screenWidth & ~1, screenHeight & ~1);
         var area = new RawRect(0, 0, settings.Width, settings.Height);
-        _videoContext.VideoProcessorSetStreamSourceRect(_processor, 0, true, area);
+        _videoContext.VideoProcessorSetStreamSourceRect(_processor, 0, true, screen);
         _videoContext.VideoProcessorSetStreamDestRect(_processor, 0, true, area);
         _videoContext.VideoProcessorSetOutputTargetRect(_processor, true, area);
 

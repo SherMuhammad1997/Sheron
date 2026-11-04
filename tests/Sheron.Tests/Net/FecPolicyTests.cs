@@ -28,4 +28,14 @@ public class FecPolicyTests
             if (m > 1) Assert.True(FecPolicy.ChanceOfMoreThan(m - 1, k + m - 1, p) > FecPolicy.TargetBlockLoss, $"k {k}, p {p}: m {m} is more than needed");
         }
     }
+
+    [Fact]
+    public void A_slower_link_plans_for_fewer_lost_blocks_and_so_gets_more_repair_shards()
+    {
+        Assert.Equal(FecPolicy.TargetBlockLoss, FecPolicy.TargetFor(null));
+        Assert.Equal(FecPolicy.TargetBlockLoss, FecPolicy.TargetFor(TimeSpan.FromMilliseconds(40)));
+        Assert.Equal(FecPolicy.TargetBlockLoss / 6, FecPolicy.TargetFor(TimeSpan.FromMilliseconds(600)), 10);
+        Assert.Equal(FecPolicy.TargetBlockLoss / 10, FecPolicy.TargetFor(TimeSpan.FromSeconds(5)), 10);
+        Assert.True(FecPolicy.ParityShards(15, 0.05, FecPolicy.TargetFor(TimeSpan.FromMilliseconds(600))) > FecPolicy.ParityShards(15, 0.05));
+    }
 }

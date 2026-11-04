@@ -130,4 +130,31 @@ public class ReliableChannelTests
         Assert.True(receiver.OnPacket(packet, delivered));
         Assert.Single(delivered);
     }
+
+    [Fact]
+    public void On_a_link_slower_than_the_first_guess_the_longer_wait_carries_over_until_a_round_trip_is_measured()
+    {
+        // Karn's rule (TRD › Packets › Resend): 600 ms round trip, first guess 250 ms.
+        var sender = new ReliableSender();
+        var receiver = new ReliableReceiver();
+        var ack = (byte[] packet) =>
+        {
+            receiver.OnPacket(packet, []);
+            return receiver.Ack();
+        };
+
+        sender.Send(Text("1"));
+        var first = sender.Poll(Ms(0));
+        Assert.Single(sender.Poll(Ms(250)));             // no answer within the guess: sent again
+        sender.OnAck(ack(first[0]), Ms(600));             // answered, but sent twice: no clean round trip
+        Assert.Null(sender.RoundTrip);
+        Assert.True(sender.ResendAfter >= Ms(500));      // the doubled wait carries over to new messages
+
+        sender.Send(Text("2"));
+        var second = sender.Poll(Ms(1000));
+        Assert.Empty(sender.Poll(Ms(1300)));             // not resent at 300 ms any more
+        sender.OnAck(ack(second[0]), Ms(1600));
+        Assert.Equal(Ms(600), sender.RoundTrip);         // a clean measurement
+        Assert.Equal(0, sender.Resends - 1);
+    }
 }

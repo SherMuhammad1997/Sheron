@@ -26,6 +26,25 @@ public enum ControlType : byte
     AccessRequest = 11,
     /// <summary>Remote PC → viewer: let in, asking the person, wrong, locked, denied or no answer.</summary>
     AccessAnswer = 12,
+
+    // Handled inside the link (Plan step 10, TRD › Automatic quality); never reach the window.
+    ClockProbe = 13,
+    ClockReply = 14,
+    LinkReport = 15,
+}
+
+/// <summary>
+/// What the viewer saw in the last 250 ms (TRD › Automatic quality): packets expected and received (loss before
+/// repair), frames received and lost (after repair), bytes, and the queueing delay and jitter in milliseconds.
+/// </summary>
+public readonly record struct LinkReport(uint PacketsExpected, uint PacketsReceived, int FramesReceived, int FramesLost,
+    uint BytesReceived, int QueueMs, int JitterMs)
+{
+    /// <summary>Packets lost on the way, 0–1; null when too few were expected to tell.</summary>
+    public double? PacketLoss => PacketsExpected < 20 ? null : Math.Clamp(1 - (double)PacketsReceived / PacketsExpected, 0, 1);
+
+    /// <summary>Frames lost after repair, 0–1; null when no frames came or went missing.</summary>
+    public double? FrameLoss => FramesReceived + FramesLost == 0 ? null : (double)FramesLost / (FramesReceived + FramesLost);
 }
 
 /// <summary>The remote PC's answer to an access request: the result, tries left before the lock, and seconds (time to answer, or lock left).</summary>
@@ -174,6 +193,67 @@ public static class ControlMessage
         var result = (Security.AccessResult)message[1];
         if (!Enum.IsDefined(result)) return false;
         answer = new AccessAnswer(result, message[2], BinaryPrimitives.ReadUInt16LittleEndian(message[3..]));
+        return true;
+    }
+
+    public static byte[] ClockProbe(long viewerMicros)
+    {
+        var message = new byte[9];
+        message[0] = (byte)ControlType.ClockProbe;
+        BinaryPrimitives.WriteInt64LittleEndian(message.AsSpan(1), viewerMicros);
+        return message;
+    }
+
+    public static bool TryReadClockProbe(ReadOnlySpan<byte> message, out long viewerMicros)
+    {
+        viewerMicros = 0;
+        if (message.Length != 9 || message[0] != (byte)ControlType.ClockProbe) return false;
+        viewerMicros = BinaryPrimitives.ReadInt64LittleEndian(message[1..]);
+        return true;
+    }
+
+    public static byte[] ClockReply(long viewerMicros, long hostMicros)
+    {
+        var message = new byte[17];
+        message[0] = (byte)ControlType.ClockReply;
+        BinaryPrimitives.WriteInt64LittleEndian(message.AsSpan(1), viewerMicros);
+        BinaryPrimitives.WriteInt64LittleEndian(message.AsSpan(9), hostMicros);
+        return message;
+    }
+
+    public static bool TryReadClockReply(ReadOnlySpan<byte> message, out long viewerMicros, out long hostMicros)
+    {
+        viewerMicros = hostMicros = 0;
+        if (message.Length != 17 || message[0] != (byte)ControlType.ClockReply) return false;
+        viewerMicros = BinaryPrimitives.ReadInt64LittleEndian(message[1..]);
+        hostMicros = BinaryPrimitives.ReadInt64LittleEndian(message[9..]);
+        return true;
+    }
+
+    public static byte[] Report(LinkReport report)
+    {
+        var message = new byte[21];
+        var span = message.AsSpan();
+        span[0] = (byte)ControlType.LinkReport;
+        BinaryPrimitives.WriteUInt32LittleEndian(span[1..], report.PacketsExpected);
+        BinaryPrimitives.WriteUInt32LittleEndian(span[5..], report.PacketsReceived);
+        BinaryPrimitives.WriteUInt16LittleEndian(span[9..], (ushort)Math.Clamp(report.FramesReceived, 0, ushort.MaxValue));
+        BinaryPrimitives.WriteUInt16LittleEndian(span[11..], (ushort)Math.Clamp(report.FramesLost, 0, ushort.MaxValue));
+        BinaryPrimitives.WriteUInt32LittleEndian(span[13..], report.BytesReceived);
+        BinaryPrimitives.WriteUInt16LittleEndian(span[17..], (ushort)Math.Clamp(report.QueueMs, 0, ushort.MaxValue));
+        BinaryPrimitives.WriteUInt16LittleEndian(span[19..], (ushort)Math.Clamp(report.JitterMs, 0, ushort.MaxValue));
+        return message;
+    }
+
+    public static bool TryReadReport(ReadOnlySpan<byte> message, out LinkReport report)
+    {
+        report = default;
+        if (message.Length != 21 || message[0] != (byte)ControlType.LinkReport) return false;
+        report = new LinkReport(BinaryPrimitives.ReadUInt32LittleEndian(message[1..]), BinaryPrimitives.ReadUInt32LittleEndian(message[5..]),
+            BinaryPrimitives.ReadUInt16LittleEndian(message[9..]), BinaryPrimitives.ReadUInt16LittleEndian(message[11..]),
+            BinaryPrimitives.ReadUInt32LittleEndian(message[13..]), BinaryPrimitives.ReadUInt16LittleEndian(message[17..]),
+            BinaryPrimitives.ReadUInt16LittleEndian(message[19..]));
+        // A late packet can make "received" pass "expected" in one report; the loss figure is clamped instead.
         return true;
     }
 }

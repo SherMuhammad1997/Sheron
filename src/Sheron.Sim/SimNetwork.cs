@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using Sheron.Core.Net;
 
@@ -11,6 +12,12 @@ public enum RouterKind
     /// <summary>A new public port for each destination: the port the server saw is useless to a peer, so punching fails when both PCs have one.</summary>
     Symmetric,
 }
+
+/// <summary>
+/// A bad link between two sites (Plan step 10): each packet is lost with <paramref name="Loss"/> or delivered after
+/// <paramref name="Delay"/> ± up to <paramref name="Jitter"/> (evenly spread, so packets can overtake each other).
+/// </summary>
+public sealed record LinkImpairment(TimeSpan Delay, TimeSpan Jitter, double Loss);
 
 /// <summary>A place with its own network: hosts behind one router with a public IP, or hosts right on the internet.</summary>
 public sealed class SimSite
@@ -54,6 +61,16 @@ public sealed class SimNetwork
     private readonly object _lock = new();
     private readonly List<SimTransport> _transports = [];
     private readonly HashSet<(SimSite, SimSite)> _blocked = [];
+    private readonly Dictionary<(SimSite, SimSite), LinkImpairment> _impaired = [];
+    private readonly PriorityQueue<(SimTransport Target, byte[] Packet, IPEndPoint From), long> _late = new();
+    private readonly Random _random;
+    private Thread? _deliverer;
+
+    /// <param name="seed">Seed for the random loss and jitter of <see cref="Impair"/>.</param>
+    public SimNetwork(int seed = 10)
+    {
+        _random = new Random(seed);
+    }
 
     public int Delivered { get; private set; }
     public int Dropped { get; private set; }
@@ -67,6 +84,19 @@ public sealed class SimNetwork
         var transport = new SimTransport(this, site, address);
         lock (_lock) _transports.Add(transport);
         return transport;
+    }
+
+    /// <summary>Makes UDP between the two sites (both ways; the same site twice for traffic inside it) slow and lossy, in real time.</summary>
+    public void Impair(SimSite a, SimSite b, LinkImpairment impairment)
+    {
+        lock (_lock)
+        {
+            _impaired[(a, b)] = impairment;
+            _impaired[(b, a)] = impairment;
+            if (_deliverer is not null) return;
+            _deliverer = new Thread(DeliverLate) { IsBackground = true, Name = "Sheron sim delay" };
+            _deliverer.Start();
+        }
     }
 
     /// <summary>Drops all UDP from <paramref name="from"/> to <paramref name="to"/>, but not back: a path that works one way only.</summary>
@@ -123,9 +153,50 @@ public sealed class SimNetwork
                 Dropped++;
                 return;
             }
+            if (_impaired.TryGetValue((site, target.Site), out var bad))
+            {
+                if (_random.NextDouble() < bad.Loss)
+                {
+                    Dropped++;
+                    return;
+                }
+                double ms = bad.Delay.TotalMilliseconds + (2 * _random.NextDouble() - 1) * bad.Jitter.TotalMilliseconds;
+                long due = Stopwatch.GetTimestamp() + (long)(Math.Max(0, ms) * Stopwatch.Frequency / 1000);
+                _late.Enqueue((target, packet.ToArray(), from), due);
+                Delivered++;
+                Monitor.PulseAll(_lock);
+                return;
+            }
             Delivered++;
         }
         target.Arrive(packet.ToArray(), from);
+    }
+
+    /// <summary>Hands each delayed packet to its host when its time comes.</summary>
+    private void DeliverLate()
+    {
+        while (true)
+        {
+            (SimTransport Target, byte[] Packet, IPEndPoint From) next;
+            lock (_lock)
+            {
+                while (true)
+                {
+                    if (_late.TryPeek(out _, out long due))
+                    {
+                        long wait = due - Stopwatch.GetTimestamp();
+                        if (wait <= 0) break;
+                        Monitor.Wait(_lock, TimeSpan.FromSeconds(Math.Min(wait / (double)Stopwatch.Frequency, 0.05)));
+                    }
+                    else
+                    {
+                        Monitor.Wait(_lock, TimeSpan.FromMilliseconds(50));
+                    }
+                }
+                next = _late.Dequeue();
+            }
+            if (!next.Target.Closed) next.Target.Arrive(next.Packet, next.From);
+        }
     }
 
     /// <summary>The site an internet address belongs to, and the inside address it reaches (through the router's mapping).</summary>

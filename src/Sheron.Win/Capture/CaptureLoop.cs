@@ -43,6 +43,11 @@ internal sealed class CaptureLoop : IDisposable
     private readonly object _lock = new();
     private volatile bool _stopping;
     private volatile bool _keyFrameWanted;
+    /// <summary>The level automatic quality asks for (Plan step 10); null: the best.</summary>
+    private QualityLevel? _wanted;
+    // Frame-rate pacing, capture thread only: the newest screen is encoded at most once per frame interval.
+    private long _lastEncodeAt;
+    private long? _pendingCapturedAt;
 
     // Used by the capture thread only.
     private VideoSettings? _settings;
@@ -82,6 +87,12 @@ internal sealed class CaptureLoop : IDisposable
     /// <summary>The next frame goes out as a keyframe, within about 100 ms even on a still screen. Any thread.</summary>
     public void RequestKeyFrame() => _keyFrameWanted = true;
 
+    /// <summary>
+    /// Encode at this bitrate, frame rate and size from now on (TRD › Automatic quality › Applying): the encoder restarts
+    /// with the new settings and the next frame is a keyframe. Any thread.
+    /// </summary>
+    public void SetQuality(QualityLevel level) => Volatile.Write(ref _wanted, level);
+
     public CaptureLoopSnapshot Snapshot()
     {
         var now = _clock.Elapsed;
@@ -111,10 +122,34 @@ internal sealed class CaptureLoop : IDisposable
                     StartEncoder(duplicator);
                 }
 
+                // A new quality level: the encoder starts again with its settings.
+                if (_settings is { } current && Wanted(duplicator) is var wanted && wanted != current)
+                {
+                    StopEncoder();
+                    StartEncoder(duplicator);
+                    _keyFrameWanted = true;
+                }
+
+                // A change that came too soon after the last frame goes out when its frame interval is up.
+                uint wait = WaitMs;
+                if (_pendingCapturedAt is { } pending)
+                {
+                    long left = _lastEncodeAt + FrameInterval() - Stopwatch.GetTimestamp();
+                    if (left <= 0)
+                    {
+                        _pendingCapturedAt = null;
+                        EncodeLatest(duplicator, pending);
+                    }
+                    else
+                    {
+                        wait = (uint)Math.Clamp(left * 1000 / Stopwatch.Frequency, 1, WaitMs);
+                    }
+                }
+
                 CaptureResult result;
                 try
                 {
-                    result = duplicator.Capture(WaitMs);
+                    result = duplicator.Capture(wait);
                 }
                 catch (SharpGen.Runtime.SharpGenException error)
                 {
@@ -142,8 +177,23 @@ internal sealed class CaptureLoop : IDisposable
                     _keyFrameWanted = false;
                     _encoder?.RequestKeyFrame();
                 }
-                if (result.Status == CaptureStatus.NewFrame) EncodeLatest(duplicator, result.CapturedAt);
-                else if (keyFrame) EncodeLatest(duplicator, Stopwatch.GetTimestamp());
+                if (keyFrame)
+                {
+                    _pendingCapturedAt = null;
+                    EncodeLatest(duplicator, result.Status == CaptureStatus.NewFrame ? result.CapturedAt : Stopwatch.GetTimestamp());
+                }
+                else if (result.Status == CaptureStatus.NewFrame)
+                {
+                    if (Stopwatch.GetTimestamp() - _lastEncodeAt >= FrameInterval())
+                    {
+                        _pendingCapturedAt = null;
+                        EncodeLatest(duplicator, result.CapturedAt);
+                    }
+                    else
+                    {
+                        _pendingCapturedAt ??= result.CapturedAt;
+                    }
+                }
             }
         }
         finally
@@ -199,10 +249,16 @@ internal sealed class CaptureLoop : IDisposable
         if (result.Pointer is not null || result.Shape is not null) _sink?.OnPointer(result.Pointer, result.Shape);
     }
 
+    /// <summary>The settings automatic quality asks for, for this screen.</summary>
+    private VideoSettings Wanted(DesktopDuplicator duplicator) =>
+        (Volatile.Read(ref _wanted) ?? QualityController.Ladder[0]).For(duplicator.Width, duplicator.Height);
+
+    private long FrameInterval() => Stopwatch.Frequency / Math.Max(1, _settings?.FramesPerSecond ?? 60);
+
     /// <summary>Starts the best encoder route that works, from <see cref="_kindIndex"/> down the list.</summary>
     private void StartEncoder(DesktopDuplicator duplicator)
     {
-        var settings = VideoSettings.ForScreen(duplicator.Width, duplicator.Height);
+        var settings = Wanted(duplicator);
         _settings = settings;
         for (; _kindIndex < _kinds.Length; _kindIndex++)
         {
@@ -235,6 +291,7 @@ internal sealed class CaptureLoop : IDisposable
         try
         {
             long started = Stopwatch.GetTimestamp();
+            _lastEncodeAt = started;
             var at = _clock.Elapsed;
             var frames = _encoder.Encode(_converter.Convert(frame), at);
             long encodedAt = Stopwatch.GetTimestamp();

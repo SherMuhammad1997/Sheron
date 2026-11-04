@@ -2,7 +2,7 @@
 
 Simple, fast remote desktop for Windows. Connect to any PC in the world with a 9-digit ID and a password, see its screen and control it.
 
-Status: Implementation Plan step 14 (connect by ID) in progress: works by ID on one network (4 Nov); the check across two different networks is next. Step 13 done on 2 Nov: the server runs on Oracle Cloud (Always Free, Singapore, 168.138.174.180) as a systemd service, and Sher's laptop registered with it. Step 16 (passwords) done: PRD A3 and A9 passed on Sher's two laptops. Step 12 (address check, hole punching, relay, TCP 443) done through the network simulator. Then 10.
+Status: Implementation Plan step 10 (automatic quality, jitter buffer, delay and fps) built; the simulator check passes (300 ms ± 100 ms, 5 % loss, no freeze over 1 s); PRD A7 numbers on Sher's laptops are next. Step 14 (connect by ID) works on one network (4 Nov); its check across two networks is still to do. Step 13 done on 2 Nov: the server runs on Oracle Cloud (Always Free, Singapore, 168.138.174.180) as a systemd service, and Sher's laptop registered with it. Step 16 (passwords) done: PRD A3 and A9 passed on Sher's two laptops. Step 12 (address check, hole punching, relay, TCP 443) done through the network simulator. Then 10.
 
 Server: `dotnet run --project src/Sheron.Server -- --port 443 --data <folder>` (TCP and UDP on that port); it prints the pin the app checks. On Oracle Linux 9: the files in `deploy/` (TRD › Server › Deployment).
 

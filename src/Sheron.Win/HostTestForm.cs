@@ -8,6 +8,7 @@ using Sheron.Core.Net;
 using Sheron.Core.Rendezvous;
 using Sheron.Core.Security;
 using Sheron.Core.Session;
+using Sheron.Core.Video;
 using LinkState = Sheron.Core.Session.LinkState;
 using Sheron.Win.Capture;
 using Sheron.Win.Encode;
@@ -48,6 +49,9 @@ internal sealed class HostTestForm : DevForm
     private readonly InputInjector _input = new();
     private Link? _link;
     private string? _linkError;
+    // Automatic quality (Plan step 10).
+    private readonly object _qualityLock = new();
+    private QualityController _quality = new();
     // Connect by ID (Plan step 14): one UDP socket shared by the session and the connector.
     private readonly CancellationTokenSource _closing = new();
     private UdpTransport? _udp;
@@ -66,7 +70,7 @@ internal sealed class HostTestForm : DevForm
 
     public HostTestForm(int port, bool allowHardwareEncoder = true)
         : base("sharing this screen (developer)", "Sharing this screen · a viewer needs the one-time password and your OK · close this window to stop",
-            new Size(960, 372), headerHeight: 372, rowsPerColumn: 9, withVideo: false)
+            new Size(1040, 372), headerHeight: 372, rowsPerColumn: 9, withVideo: false)
     {
         _port = port;
         _allowHardwareEncoder = allowHardwareEncoder;
@@ -89,6 +93,11 @@ internal sealed class HostTestForm : DevForm
             _access.ConsentNeeded += request => OnUiThread(() => ShowRequest(request));
             _access.ConsentEnded += () => OnUiThread(HideRequest);
             // Nothing the viewer held stays pressed once it is gone (TRD › Input path › Stuck keys).
+            // The viewer's reports drive automatic quality, once it is let in and sharing.
+            _link.ReportReceived += report =>
+            {
+                if (_access?.IsLetIn == true) OnReport(report);
+            };
             _link.Disconnected += () =>
             {
                 _input.ReleaseAll();
@@ -197,7 +206,16 @@ internal sealed class HostTestForm : DevForm
     {
         StopSharing();
         if (_link is null) return;
+        // Each viewer starts at the best level; the viewer's reports and this PC's CPU move it (TRD › Automatic quality).
+        lock (_qualityLock) _quality = new QualityController();
         _capture = new CaptureLoop(_allowHardwareEncoder, new LinkSender(_link));
+    }
+
+    /// <summary>On the link's thread, every 250 ms while a viewer is let in.</summary>
+    private void OnReport(LinkReport report)
+    {
+        lock (_qualityLock)
+            if (_quality.OnReport(report, _clock.Elapsed)) Volatile.Read(ref _capture)?.SetQuality(_quality.Current);
     }
 
     private void StopSharing()
@@ -209,6 +227,10 @@ internal sealed class HostTestForm : DevForm
 
     protected override void ReadFigures()
     {
+        // The CPU guard: Sheron's own share of this PC (TRD › Automatic quality).
+        if (_capture is { } capture)
+            lock (_qualityLock)
+                if (_quality.OnCpu(CpuPercent, _clock.Elapsed)) capture.SetQuality(_quality.Current);
         _captureSnapshot = _capture?.Snapshot();
         _linkSnapshot = _link?.Snapshot();
         if (_linkSnapshot is { } l)
@@ -257,6 +279,10 @@ internal sealed class HostTestForm : DevForm
         yield return ("Capture", c is null ? "–" : $"{c.Stats.FramesPerSecond} fps · {c.Stats.AverageFrameMs:0.00} ms", null);
         yield return ("Sent", viewed ? $"{_framesPerSecond:0} frames/s · {_megabitsPerSecond:0.0} Mbit/s" : "–", null);
         yield return ("Round trip", l?.RoundTrip is { } rtt && viewed ? $"{rtt.TotalMilliseconds:0} ms" : "–", null);
+        string quality;
+        lock (_qualityLock) quality = $"{_quality.Current}{(_quality.CpuCap > 0 ? " · CPU guard" : "")}";
+        yield return ("Quality", !viewed ? "–"
+            : l!.LastReport is { } r ? $"{quality} · loss {l.PacketLoss:P1} · queue {r.QueueMs} ms · jitter {r.JitterMs} ms" : quality, null);
         long lastInput = _input.LastInputAt;
         yield return ("Control", !viewed ? "–"
             : lastInput == 0 ? "not used yet"
@@ -371,7 +397,7 @@ internal sealed class HostTestForm : DevForm
                 link.SendControl(ControlMessage.VideoFormat(width, height));
                 _format = (width, height);
             }
-            link.SendFrame(frame.Data, frame.KeyFrame);
+            link.SendFrame(frame.Data, frame.KeyFrame, capturedAt);
         }
 
         public void OnPointer(PointerPosition? position, PointerShape? shape)

@@ -42,6 +42,12 @@ public sealed class SecureSession : IDisposable
     /// <summary>Packets refused: changed, replayed, too old or not sealed.</summary>
     public int Refused { get; private set; }
 
+    /// <summary>The highest counter of a packet opened so far: with <see cref="Opened"/> it gives the packets lost on the way (Plan step 10).</summary>
+    public ulong HighestOpened { get; private set; }
+
+    /// <summary>Packets opened so far.</summary>
+    public long Opened { get; private set; }
+
     /// <summary>Encrypts one plain packet (video, reliable or ack) into a sealed packet.</summary>
     public byte[] Seal(ReadOnlySpan<byte> plain)
     {
@@ -82,6 +88,8 @@ public sealed class SecureSession : IDisposable
                 return Refuse();
             }
             _window.Mark(counter);
+            Opened++;
+            if (counter > HighestOpened) HighestOpened = counter;
             plain = opened;
             return true;
         }

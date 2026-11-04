@@ -9,7 +9,10 @@ public sealed class VideoPacketizer
     private uint _nextFrame;
 
     /// <summary>The link's loss rate as the viewer reports it (Plan step 10); sets how many repair shards are made.</summary>
-    public double LossRate { get; set; } = FecPolicy.MinLossRate;
+    public double LossRate { get; set; } = FecPolicy.FirstLossRate;
+
+    /// <summary>The chance a block may still be lost, from the round trip (<see cref="FecPolicy.TargetFor"/>).</summary>
+    public double TargetBlockLoss { get; set; } = FecPolicy.TargetBlockLoss;
 
     /// <summary>Packets for one frame: per block its data shards, then its repair shards. Each is at most <see cref="PacketLimits.MaxPlain"/> bytes.</summary>
     public List<byte[]> Packetize(ReadOnlySpan<byte> frame, bool keyFrame)
@@ -25,7 +28,7 @@ public sealed class VideoPacketizer
         {
             int k = VideoLayout.DataShardsIn(block, shards, blocks);
             int first = VideoLayout.FirstShardOf(block, shards, blocks);
-            int m = FecPolicy.ParityShards(k, LossRate);
+            int m = FecPolicy.ParityShards(k, LossRate, TargetBlockLoss);
 
             // Each shard is made right inside the packet it goes out in.
             var shardsOfBlock = new Memory<byte>[k + m];

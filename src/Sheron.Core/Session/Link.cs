@@ -37,7 +37,14 @@ public sealed record LinkSnapshot(
     int RebuiltShards,
     TimeSpan? RoundTrip,
     int Resends,
-    int Refused);
+    int Refused,
+    double PacketLoss = 0,
+    int QueueMs = 0,
+    int JitterMs = 0,
+    TimeSpan HoldTime = default,
+    bool ClockKnown = false,
+    LinkReport? LastReport = null,
+    int GaveUp = 0);
 
 /// <summary>
 /// One side of a direct link between two PCs over UDP (TRD › Connect by IP): the session handshake with retries,
@@ -69,6 +76,15 @@ public sealed class Link : IDisposable
     private ReliableReceiver _reliableIn = new();
     private VideoPacketizer _packetizer = new();
     private FrameAssembler _assembler = new();
+    private readonly List<AssembledFrame> _released = [];
+    // Plan step 10 (TRD › Automatic quality): the viewer measures and reports; the remote PC answers clock probes.
+    private DelayTracker _delays = new();
+    private ClockSync _clockSync = new();
+    private TimeSpan _lastReport, _lastProbe;
+    private (ulong Highest, long Opened, int Frames, int Lost, long Bytes) _reportBase;
+    private double _packetLoss;
+    private readonly Queue<(uint Expected, uint Received)> _lossWindow = new();
+    private LinkReport? _lastReportIn;
     private TimeSpan _lastHeard;
     private TimeSpan _lastPing;
     private TimeSpan _lastHandshakeSent;
@@ -139,29 +155,59 @@ public sealed class Link : IDisposable
     /// <summary>Viewer: a frame came in whole.</summary>
     public event Action<AssembledFrame>? FrameReceived;
 
-    /// <summary>A control message other than Ping came in, in order.</summary>
+    /// <summary>A control message other than Ping came in, in order. Clock and report messages stay inside the link.</summary>
     public event Action<byte[]>? ControlReceived;
+
+    /// <summary>Remote PC: the viewer's Link report, every 250 ms (TRD › Automatic quality).</summary>
+    public event Action<LinkReport>? ReportReceived;
 
     public LinkSnapshot Snapshot()
     {
         lock (_gate)
         {
+            long now = Micros.Now();
             return new LinkSnapshot(_state, _peer, _session?.RemoteFingerprint, _packetsSent, _bytesSent, _packetsReceived,
                 _bytesReceived, _framesSent, _framesReceived, _assembler.LostFrames, _assembler.RebuiltShards,
-                _reliableOut.RoundTrip, _reliableOut.Resends, _refused + (_session?.Refused ?? 0));
+                _reliableOut.RoundTrip, _reliableOut.Resends, _refused + (_session?.Refused ?? 0),
+                _packetLoss, _isHost ? _lastReportIn?.QueueMs ?? 0 : _delays.QueueMs(now),
+                _isHost ? _lastReportIn?.JitterMs ?? 0 : _delays.JitterMs(now), _assembler.HoldTime,
+                _clockSync.Offset is not null, _lastReportIn, _assembler.GaveUp);
         }
     }
 
-    /// <summary>Remote PC: sends one encoded frame as sealed video packets. Dropped when no viewer is connected.</summary>
-    public void SendFrame(ReadOnlySpan<byte> frame, bool keyFrame)
+    /// <summary>
+    /// Remote PC: sends one encoded frame as sealed video packets, after 8 bytes of its capture time
+    /// (<paramref name="capturedAt"/>, a Stopwatch timestamp; 0: now). Dropped when no viewer is connected.
+    /// </summary>
+    public void SendFrame(ReadOnlySpan<byte> frame, bool keyFrame, long capturedAt = 0)
     {
         lock (_gate)
         {
             if (_state != LinkState.Connected || _session is null || _peer is null) return;
-            foreach (var packet in _packetizer.Packetize(frame, keyFrame)) Send(_session.Seal(packet), _peer);
+            var payload = new byte[CaptureTimeSize + frame.Length];
+            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(payload,
+                Micros.From(capturedAt != 0 ? capturedAt : Stopwatch.GetTimestamp()));
+            frame.CopyTo(payload.AsSpan(CaptureTimeSize));
+            foreach (var packet in _packetizer.Packetize(payload, keyFrame)) Send(_session.Seal(packet), _peer);
             _framesSent++;
         }
     }
+
+    /// <summary>Bytes of capture time in front of each frame (TRD › Automatic quality › Delay figure).</summary>
+    public const int CaptureTimeSize = 8;
+
+    /// <summary>
+    /// How long a viewer waits for the keyframe it asked for before asking again: one and a half round trips, at
+    /// least 300 ms (TRD › Connect by IP › After a lost frame).
+    /// </summary>
+    public static TimeSpan AskKeyFrameAgainAfter(TimeSpan? roundTrip)
+    {
+        var floor = TimeSpan.FromMilliseconds(300);
+        return roundTrip is { } rtt && rtt * 1.5 > floor ? rtt * 1.5 : floor;
+    }
+
+    /// <summary>The jitter buffer holds a frame at most this long for an earlier missing one.</summary>
+    public static readonly TimeSpan MaxHold = TimeSpan.FromMilliseconds(250);
 
     /// <summary>Sends a control message over the reliable channel. Dropped when not connected.</summary>
     public void SendControl(ReadOnlySpan<byte> message)
@@ -294,24 +340,111 @@ public sealed class Link : IDisposable
         switch ((PacketKind)plain[0])
         {
             case PacketKind.Video when !_isHost:
-                if (_assembler.Add(plain) is { } frame)
-                {
-                    _framesReceived++;
-                    raise.Add(() => FrameReceived?.Invoke(frame));
-                }
+                _assembler.Add(plain, Stopwatch.GetTimestamp(), _released);
+                Deliver(raise);
                 break;
             case PacketKind.Reliable:
                 var messages = new List<byte[]>();
                 if (!_reliableIn.OnPacket(plain, messages)) break;
                 Send(_session.Seal(_reliableIn.Ack()), from);
                 foreach (var message in messages)
-                    if (ControlMessage.TypeOf(message) != ControlType.Ping) raise.Add(() => ControlReceived?.Invoke(message));
+                    if (!HandleInside(message, now, raise)) raise.Add(() => ControlReceived?.Invoke(message));
                 break;
             case PacketKind.Ack:
                 _reliableOut.OnAck(plain, now);
                 FlushReliable(now);
                 break;
         }
+    }
+
+    /// <summary>
+    /// Viewer: hands on the frames the jitter buffer let go, without their capture time, and measures their delay
+    /// (TRD › Automatic quality). Under <see cref="_gate"/>.
+    /// </summary>
+    private void Deliver(List<Action> raise)
+    {
+        foreach (var released in _released)
+        {
+            if (released.Data.Length < CaptureTimeSize) continue;
+            long captured = System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(released.Data);
+            long completed = Micros.From(released.CompletedAt);
+            _delays.Add(completed, completed - captured);
+            long? local = _clockSync.Offset is { } offset ? Micros.ToTimestamp(captured - offset) : null;
+            var frame = released with { Data = released.Data[CaptureTimeSize..], CapturedAt = local };
+            _framesReceived++;
+            raise.Add(() => FrameReceived?.Invoke(frame));
+        }
+        _released.Clear();
+    }
+
+    /// <summary>Clock probes and replies and Link reports are the link's own (TRD › Automatic quality). Under <see cref="_gate"/>.</summary>
+    private bool HandleInside(byte[] message, TimeSpan now, List<Action> raise)
+    {
+        switch (ControlMessage.TypeOf(message))
+        {
+            case ControlType.Ping:
+                return true;
+            case ControlType.ClockProbe when _isHost && ControlMessage.TryReadClockProbe(message, out long viewerMicros):
+                _reliableOut.Send(ControlMessage.ClockReply(viewerMicros, Micros.Now()));
+                FlushReliable(now);
+                return true;
+            case ControlType.ClockReply when !_isHost && ControlMessage.TryReadClockReply(message, out long sent, out long host):
+                _clockSync.Add(sent, host, Micros.Now());
+                return true;
+            case ControlType.LinkReport when _isHost && ControlMessage.TryReadReport(message, out var report):
+                // Repair data follows the loss over the last 2 s of reports, never below 1 % (TRD › Packets). Summed,
+                // not averaged: packets that overtake each other move between reports but are not lost.
+                _lossWindow.Enqueue((report.PacketsExpected, report.PacketsReceived));
+                while (_lossWindow.Count > 8) _lossWindow.Dequeue();
+                long expected = _lossWindow.Sum(r => (long)r.Expected), received = _lossWindow.Sum(r => (long)r.Received);
+                if (expected >= 20)
+                {
+                    _packetLoss = Math.Clamp(1 - (double)received / expected, 0, 1);
+                    // Planned for the top of what the count can tell: the loss plus twice its uncertainty, so a count
+                    // that comes out a little low does not leave blocks short of repair shards.
+                    double margin = 2 * Math.Sqrt(_packetLoss * (1 - _packetLoss) / expected);
+                    _packetizer.LossRate = Math.Max(FecPolicy.MinLossRate, _packetLoss + margin);
+                }
+                _packetizer.TargetBlockLoss = FecPolicy.TargetFor(_reliableOut.RoundTrip);
+                _lastReportIn = report;
+                raise.Add(() => ReportReceived?.Invoke(report));
+                return true;
+            case ControlType.ClockProbe or ControlType.ClockReply or ControlType.LinkReport:
+                return true;   // the wrong way round, or malformed: not for the window either
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>Viewer, every 250 ms: the Link report, and the hold time it implies; every second, a clock probe.</summary>
+    private void Report(TimeSpan now)
+    {
+        if (now - _lastProbe >= TimeSpan.FromSeconds(1))
+        {
+            _reliableOut.Send(ControlMessage.ClockProbe(Micros.Now()));
+            _lastProbe = now;
+        }
+        if (now - _lastReport < TimeSpan.FromMilliseconds(250) || _session is null) return;
+        _lastReport = now;
+        long micros = Micros.Now();
+        var b = _reportBase;
+        var report = new LinkReport(
+            (uint)Math.Min(uint.MaxValue, _session.HighestOpened - b.Highest),
+            (uint)Math.Clamp(_session.Opened - b.Opened, 0, uint.MaxValue),
+            _framesReceived - b.Frames, _assembler.LostFrames - b.Lost,
+            (uint)Math.Clamp(_bytesReceived - b.Bytes, 0, uint.MaxValue),
+            _delays.QueueMs(micros), _delays.JitterMs(micros));
+        _reportBase = (_session.HighestOpened, _session.Opened, _framesReceived, _assembler.LostFrames, _bytesReceived);
+        if (report.PacketLoss is { } loss) _packetLoss = loss;
+        _lastReportIn = report;
+        // Out-of-order frames wait at most three times the jitter, never over the cap (TRD › Jitter buffer); until enough
+        // frames have come to measure it, the hold stays as it is (the longest, at the start).
+        if (_delays.KnowsJitter(micros))
+        {
+            var hold = TimeSpan.FromMilliseconds(3.0 * report.JitterMs);
+            _assembler.HoldTime = hold < MaxHold ? hold : MaxHold;
+        }
+        _reliableOut.Send(ControlMessage.Report(report));
     }
 
     /// <summary>Retries the handshake, pings, resends, and ends a session that has gone quiet.</summary>
@@ -340,6 +473,12 @@ public sealed class Link : IDisposable
                     _reliableOut.Send(ControlMessage.Ping());
                     _lastPing = now;
                 }
+                if (!_isHost)
+                {
+                    _assembler.Expire(Stopwatch.GetTimestamp(), _released);
+                    Deliver(raise);
+                    if (_heardSealed) Report(now);
+                }
                 FlushReliable(now);
                 if (now - _lastHeard >= _timings.Timeout)
                 {
@@ -359,7 +498,16 @@ public sealed class Link : IDisposable
         _reliableOut = new ReliableSender();
         _reliableIn = new ReliableReceiver();
         _packetizer = new VideoPacketizer();
-        _assembler = new FrameAssembler();
+        // Until the first report has measured the jitter, out-of-order frames get the longest hold.
+        _assembler = new FrameAssembler { HoldTime = MaxHold };
+        _released.Clear();
+        _delays = new DelayTracker();
+        _clockSync = new ClockSync();
+        _packetLoss = 0;
+        _lossWindow.Clear();
+        _lastReportIn = null;
+        _lastReport = _lastProbe = _clock.Elapsed - TimeSpan.FromSeconds(1);
+        _reportBase = (0, 0, _framesReceived, 0, _bytesReceived);
         _heardSealed = false;
         _lastHeard = _clock.Elapsed;
         _lastPing = _clock.Elapsed - _timings.Ping;   // ping at once: it measures the round trip

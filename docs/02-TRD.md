@@ -101,7 +101,7 @@ A frame is cut into the fewest shards of at most 1,152 bytes, all the same size;
 | Item | Rule |
 | --- | --- |
 | Repair (FEC) | Reed–Solomon over GF(2⁸) (polynomial x⁸ + x⁴ + x³ + x² + 1), systematic, with a Cauchy matrix for the repair rows: any k of a block's k + m shards rebuild it. Written from the mathematics in our own code |
-| How many repair shards | The fewest m for which a block of k + m shards, each lost with the link's loss rate, loses more than m with a chance of at most 0.1 %. The loss rate comes from the viewer's reports (Plan step 10); until then, and never below, 1 % is assumed. At 5 % loss a 15-shard frame gets 5 repair shards |
+| How many repair shards | The fewest m for which a block of k + m shards, each lost with the link's loss rate, loses more than m with a chance of at most 0.1 % on a link with a round trip up to 100 ms; on a slower link 0.1 % × 100 ms ÷ round trip (at least 0.01 %), because a lost frame costs a round trip to repair with a keyframe (Plan step 10). The loss rate comes from the viewer's reports; until the first one, 5 % is assumed; never below 1 %. At 5 % loss a 15-shard frame gets 5 repair shards on a fast link |
 | Receiver | Collects shards per frame; a block is rebuilt as soon as any k of its shards are in; a frame is handed on when all its blocks are. A frame newer than the last one handed on is handed on at once; older ones are dropped. Frames skipped this way are counted as lost, so the viewer can ask for a keyframe (Plan step 10). At most 64 unfinished frames are kept |
 | Bad packets | Wrong sizes or numbers that do not fit the frame are ignored, never an error |
 
@@ -126,7 +126,7 @@ A frame is cut into the fewest shards of at most 1,152 bytes, all the same size;
 | --- | --- |
 | Sending | New messages go out at the next send (input goes ahead of video, Plan step 9). At most 1,024 numbers are in flight |
 | Ack | The receiver answers every reliable packet with an ack at once |
-| Resend | A fragment is sent again when an ack shows later numbers arrived but not it and its own ack is overdue (a round trip and a quarter since it went, so a packet that is only late, overtaken by a later one, is not resent), or when no ack covers it within the resend time: smoothed round trip + 4 × its variation, at least 30 ms, at most 2 s, 250 ms before the first measurement, doubling with each resend of the same fragment. Round trips are measured only on fragments sent once |
+| Resend | A fragment is sent again when an ack shows later numbers arrived but not it and its own ack is overdue (a round trip and a quarter since it went, so a packet that is only late, overtaken by a later one, is not resent), or when no ack covers it within the resend time: smoothed round trip + 4 × its variation, at least 30 ms, at most 2 s, 250 ms before the first measurement, doubling with each resend of the same fragment. Round trips are measured only on fragments sent once. After a resend for want of an answer, new fragments also wait the doubled time until one is answered cleanly (Karn's rule; added in Plan step 10: on a 600 ms round trip every fragment was resent and the round trip never measured) |
 | Receiving | Fragments are put back in order; duplicates are dropped; a message is handed on when its last fragment is in |
 
 **Bad-network simulator** (`Sheron.Sim`): a one-way link on a virtual clock, so tests run in milliseconds. Settings: delay, jitter (each packet's delay varies evenly by up to ± the jitter, so packets can arrive out of order), loss rate, and UDP blocked (everything dropped). It refuses packets over 1,200 bytes. Seeded, so a test gives the same result every run.
@@ -141,15 +141,34 @@ Measured 26 Oct in the cloud session (tests `BadNetworkTests`):
 | Input, 5,000 messages, one every millisecond (every 50th 3 kB), 5 % loss each way, 30 ms ± 10 ms each way | All 5,000 once and in order; 932 resends; measured round trip 58 ms; delay median 94 ms, 99 % 178 ms, longest 207 ms. At one message a millisecond nearly every message waits behind a lost one, about a round trip and a half |
 | Time per frame (Release build, both sides at 5 % loss) | 16.7 kB frame: 0.09 ms to make the packets, 0.09 ms to rebuild. 200 kB keyframe: 0.71 ms and 0.74 ms. Repair maths 32 bytes per step with AVX2 (16 with SSSE3) |
 
-## Automatic quality
+## Automatic quality (Plan step 10)
 
 | Rule | Detail |
 | --- | --- |
-| Measure | Every 250 ms: round trip, loss, received rate |
-| Step down | Delay rising or loss > 2 % → lower bitrate; then fps (60 → 30 → 15); then picture size (100 → 75 → 50 %) |
-| Step up | Link stable for 2 s → one step back up |
-| CPU guard | Sheron above 10 % CPU on the remote PC for 5 s → lower fps, then size |
-| Quality menu | Auto (default) · Best speed (low delay first) · Best picture (sharp text first, fps may drop) |
+| Measure | The viewer measures, and every 250 ms sends the remote PC a Link report: packets expected and received (packet loss before repair: gaps in the sealed packets' counter, TRD › Security), frames received and frames lost after repair, bytes received, queueing delay and jitter. Delay figures come from each frame's capture time: one-way delay = arrival − capture (the two clocks differ by a fixed offset, so only changes matter): queueing delay = the lowest over the last second − the lowest of the last 10 s (jitter alone does not lift the lowest value; a link filling up lifts them all); jitter = the spread (95th − 5th percentile) over the last 2 s. The remote PC adds the round trip its reliable channel measures |
+| Repair data | The remote PC sets the FEC loss rate from the reports: the loss over the last 2 s (packets received ÷ expected, 8 reports summed, so packets that overtake each other and land in the next report do not count as lost), plus twice its uncertainty (2 × √(p(1 − p) ÷ packets expected)), so a count that comes out a little low does not leave blocks short; never below 1 % (TRD › Packets) |
+| Bad link | A report is bad when more than 2 % of frames were lost after repair, or the queueing delay is over 100 ms (delay rising: the link is too full). Plain packet loss that repair data covers is not a reason to step down. A report is calm when at most 0.5 % of frames were lost and the queueing delay is under 30 ms |
+| Step down | Two bad reports in a row, and at least 1 s since the last change → one step down the ladder: first bitrate (8 → 6 → 4 → 3 → 2 Mbps), then fps (60 → 30 → 15), then picture size (100 → 75 → 50 %, with 1.5 and 1 Mbps) |
+| Step up | Eight calm reports in a row (2 s), and at least 2 s since the last change → one step back up |
+| CPU guard | Sheron above 10 % CPU on the remote PC for 5 s → at most 30 fps, then 15 fps, then 75 % and 50 % size; under 7 % for 10 s → one cap off again. The lower of the ladder and the cap wins |
+| Applying | A new bitrate, frame rate or size restarts the encoder with the new settings, so the next frame is a keyframe; the frame rate is kept by encoding the newest screen at most once per frame interval (a change in between is encoded when the interval is up) |
+| Quality menu | Auto (default, the rules above) · Best speed (low delay first) · Best picture (sharp text first, fps may drop). The menu comes with the session toolbar (Plan step 15) |
+
+**Jitter buffer** (viewer): frames are handed to the decoder in order. A frame that is complete while an earlier one is still missing is held up to the hold time: three times the jitter, at most 250 ms (next to none on a calm link); 250 ms until 10 frames have come to measure the jitter. (Twice the jitter was too short: in the step 10 test, frames given up still had their packets arriving afterwards.) When the earlier frame completes, both go on in order; when the hold time is up, the missing frame counts as lost and the viewer asks for a keyframe. A keyframe goes on at once: the decoder can start again from it.
+
+**Delay figure** (toolbar, PRD F8): each frame starts with 8 bytes, the remote PC's clock at capture (microseconds), before the encoded picture. The viewer sends a Clock probe every second (its own time); the remote PC answers with that time and its own; the reply with the shortest round trip of the last eight gives the offset between the clocks. The capture time moved onto the viewer's clock, up to the moment the frame is shown, is the delay the toolbar shows, with the frames per second shown.
+
+| Control message | Byte 0 | Then |
+| --- | --- | --- |
+| Clock probe (viewer → remote PC) | 13 | Viewer's clock, µs (8 bytes) |
+| Clock reply (remote PC → viewer) | 14 | The viewer's clock from the probe (8), the remote PC's clock, µs (8) |
+| Link report (viewer → remote PC) | 15 | Packets expected (4), packets received (4), frames received (2), frames lost (2), bytes received (4), queueing delay ms (2), jitter ms (2) |
+
+These three are handled inside the link and never reach the window or the access check.
+
+Measured 4 Nov in the cloud session (test `BadNetworkSessionTests`, 20 s, 60 fps at the best level, ten runs): 0 frames lost after repair in every run, longest gap between decodable frames 77–100 ms, 59.4–59.8 fps shown, all input in order; packet loss measured about 5 %; round trip measured 590–610 ms; capture → shown about 350–400 ms; no quality step needed.
+
+Plan step 10 check: through the network simulator in real time, 300 ms ± 100 ms each way (600 ms round trip) and 5 % loss each way, a session with automatic quality keeps showing frames with no gap over 1 s, and input arrives; then PRD A7 is measured on Sher's laptops on one network (delay capture → shown, CPU during office work, still screen CPU and data) and written here.
 
 ## Input path
 
@@ -199,7 +218,7 @@ Before the server exists (Plan steps 11–14), two PCs on the same network conne
 | Release all | 9 | Nothing: the remote PC lets go of every key and button the viewer holds |
 | Keyframe request | 10 | Nothing: the remote PC encodes its next frame as a keyframe (IDR), at once even if its screen is still |
 
-**After a lost frame** (added 1 Nov, Plan step 9 test: on the iPhone hotspot, lost frames left smeared, broken pictures, which on a still screen stayed for minutes): the viewer sees a gap in the frame numbers, stops decoding, keeps showing the last clean picture, and sends a keyframe request; again every 300 ms until a keyframe arrives. The remote PC asks its encoder for an IDR (oneVPL: `mfxEncodeCtrl.FrameType` = I + reference + IDR; Media Foundation: `CODECAPI_AVEncVideoForceKeyFrame`) and, if its screen is still, encodes the last captured image again so the keyframe goes out within about 100 ms. This is the "new keyframe only when the viewer asks after loss" of the video path, brought forward from Plan step 10.
+**After a lost frame** (added 1 Nov, Plan step 9 test: on the iPhone hotspot, lost frames left smeared, broken pictures, which on a still screen stayed for minutes): the viewer sees a gap in the frame numbers, stops decoding, keeps showing the last clean picture, and sends a keyframe request; again every one and a half round trips (at least 300 ms; Plan step 10, so a slow link does not get a second keyframe while the first is on its way) until a keyframe arrives. The remote PC asks its encoder for an IDR (oneVPL: `mfxEncodeCtrl.FrameType` = I + reference + IDR; Media Foundation: `CODECAPI_AVEncVideoForceKeyFrame`) and, if its screen is still, encodes the last captured image again so the keyframe goes out within about 100 ms. This is the "new keyframe only when the viewer asks after loss" of the video path, brought forward from Plan step 10.
 
 The viewer holds frames that come before the video format (at most 60) and decodes them once it is known.
 

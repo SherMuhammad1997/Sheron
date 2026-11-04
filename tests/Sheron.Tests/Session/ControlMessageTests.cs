@@ -57,4 +57,21 @@ public class ControlMessageTests
         Assert.False(ControlMessage.TryReadAnswer([(byte)ControlType.AccessAnswer, 9, 0, 0, 0], out _));            // unknown result
         Assert.False(ControlMessage.TryReadAnswer([(byte)ControlType.AccessAnswer, 1, 0, 0], out _));
     }
+
+    [Fact]
+    public void Clock_and_report_messages_read_back()
+    {
+        Assert.True(ControlMessage.TryReadClockProbe(ControlMessage.ClockProbe(123_456_789), out long sent));
+        Assert.Equal(123_456_789, sent);
+        Assert.True(ControlMessage.TryReadClockReply(ControlMessage.ClockReply(5, -7), out long viewer, out long host));
+        Assert.Equal((5L, -7L), (viewer, host));
+
+        var report = new LinkReport(400, 380, 15, 1, 450_000, 12, 40);
+        Assert.True(ControlMessage.TryReadReport(ControlMessage.Report(report), out var back));
+        Assert.Equal(report, back);
+        Assert.Equal(0.05, back.PacketLoss!.Value, 6);
+        Assert.Equal(1.0 / 16, back.FrameLoss!.Value, 6);
+        Assert.Null(new LinkReport(10, 10, 0, 0, 0, 0, 0).PacketLoss);   // too few to tell
+        Assert.False(ControlMessage.TryReadReport(ControlMessage.Report(report).AsSpan(0, 20), out _));
+    }
 }

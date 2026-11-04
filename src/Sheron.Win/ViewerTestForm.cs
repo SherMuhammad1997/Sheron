@@ -42,6 +42,7 @@ internal sealed class ViewerTestForm : DevForm
     private string? _keyError;
     private ViewerAccess? _access;
     private long _answeredAt;
+    private volatile bool _timedFromCapture;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly object _formatLock = new();
     private readonly List<AssembledFrame> _early = [];
@@ -54,7 +55,6 @@ internal sealed class ViewerTestForm : DevForm
     private double _framesPerSecond;
     private double _megabitsPerSecond;
     // Lost frames, on the link's thread under _formatLock (TRD › Connect by IP › After a lost frame).
-    private static readonly TimeSpan AskAgainAfter = TimeSpan.FromMilliseconds(300);
     private uint? _lastFrameNumber;
     private bool _waitingForKeyFrame;
     private long _askedAt;
@@ -313,7 +313,7 @@ internal sealed class ViewerTestForm : DevForm
                 _viewer?.WaitForKeyFrame();
                 AskForKeyFrame();
             }
-            else if (_waitingForKeyFrame && Stopwatch.GetElapsedTime(_askedAt) >= AskAgainAfter)
+            else if (_waitingForKeyFrame && Stopwatch.GetElapsedTime(_askedAt) >= Link.AskKeyFrameAgainAfter(_link?.Snapshot().RoundTrip))
             {
                 AskForKeyFrame();
             }
@@ -358,11 +358,16 @@ internal sealed class ViewerTestForm : DevForm
         }
     }
 
-    /// <summary>The viewer's timer starts when the frame arrived whole: the two PCs' clocks cannot be compared.</summary>
+    /// <summary>
+    /// The viewer's timer starts at capture on the remote PC once the link has matched the two clocks (TRD › Automatic
+    /// quality › Delay figure), until then when the frame arrived whole.
+    /// </summary>
     private void Show(AssembledFrame frame, (int Width, int Height) format)
     {
         long arrived = Stopwatch.GetTimestamp();
-        _viewer?.OnVideo(new EncodedFrame(frame.Data, frame.KeyFrame), format.Width, format.Height, arrived, arrived);
+        long start = frame.CapturedAt is { } captured && captured <= arrived ? captured : arrived;
+        _timedFromCapture = frame.CapturedAt is not null;
+        _viewer?.OnVideo(new EncodedFrame(frame.Data, frame.KeyFrame), format.Width, format.Height, start, arrived);
     }
 
     protected override void ReadFigures()
@@ -417,12 +422,16 @@ internal sealed class ViewerTestForm : DevForm
         // Right column: how well.
         var t = v.Latency;
         yield return ("Frames /s", $"received {_framesPerSecond:0} · shown {t.FramesPerSecond}", null);
-        yield return ("Arrived → shown", t.FramesPerSecond > 0 ? $"avg {t.AverageMs:0.0} · max {t.MaxMs:0.0} ms" : "–", null);
+        // PRD F8: the delay from capture on the remote PC to this screen, once the clocks are matched.
+        yield return (_timedFromCapture ? "Delay" : "Arrived → shown",
+            t.FramesPerSecond > 0 ? $"avg {t.AverageMs:0.0} · max {t.MaxMs:0.0} ms" + (_timedFromCapture ? " (capture → shown)" : "") : "–",
+            _timedFromCapture ? Accent : null);
         int asked;
         lock (_formatLock) asked = _keyFramesAsked;
         yield return ("Lost frames", $"{l.LostFrames} · keyframes asked {asked} · shards rebuilt {l.RebuiltShards}", l.LostFrames > 0 ? Bad : null);
         yield return ("Data", $"{_megabitsPerSecond:0.0} Mbit/s", null);
-        yield return ("Round trip", l.RoundTrip is { } rtt ? $"{rtt.TotalMilliseconds:0.0} ms" : "–", null);
+        yield return ("Round trip", (l.RoundTrip is { } rtt ? $"{rtt.TotalMilliseconds:0.0} ms" : "–")
+            + $" · loss {l.PacketLoss:P1} · jitter {l.JitterMs} ms", null);
         yield return ("Sheron CPU", $"{CpuPercent:0.0} % of this PC (last 3 s)", null);
     }
 

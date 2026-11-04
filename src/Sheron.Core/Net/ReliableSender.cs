@@ -26,6 +26,11 @@ public sealed class ReliableSender
     private uint _next;
     private TimeSpan? _roundTrip;
     private TimeSpan _variation;
+    /// <summary>
+    /// After a resend for want of an answer, new fragments wait at least this long too, until one is answered cleanly
+    /// (Karn's rule): otherwise on a link slower than the first guess every fragment is resent and none is measured.
+    /// </summary>
+    private TimeSpan _backedOff;
 
     /// <summary>Fragments sent but not yet acked, or not yet sent.</summary>
     public int Unacked => _waiting.Count;
@@ -37,9 +42,14 @@ public sealed class ReliableSender
     public TimeSpan? RoundTrip => _roundTrip;
 
     /// <summary>How long a sent fragment waits for its ack before it is sent again (the first time).</summary>
-    public TimeSpan ResendAfter => _roundTrip is { } rtt
-        ? Clamp(rtt + 4 * _variation, MinResendAfter, MaxResendAfter)
-        : FirstResendAfter;
+    public TimeSpan ResendAfter
+    {
+        get
+        {
+            var after = _roundTrip is { } rtt ? Clamp(rtt + 4 * _variation, MinResendAfter, MaxResendAfter) : FirstResendAfter;
+            return after > _backedOff ? after : _backedOff;
+        }
+    }
 
     /// <summary>Queues one message; it goes out at the next <see cref="Poll"/>.</summary>
     public void Send(ReadOnlySpan<byte> message)
@@ -68,10 +78,15 @@ public sealed class ReliableSender
             foreach (var f in _waiting)
             {
                 if ((int)(f.Sequence - oldest) >= Window) break;
-                bool send = f.Sends == 0
-                    || (f.Missing && now - f.SentAt >= lostAfter)
-                    || now - f.SentAt >= Backoff(f.Sends);
-                if (send) due.Add(f);
+                bool timedOut = f.Sends > 0 && now - f.SentAt >= Backoff(f.Sends);
+                bool send = f.Sends == 0 || (f.Missing && now - f.SentAt >= lostAfter) || timedOut;
+                if (!send) continue;
+                due.Add(f);
+                if (timedOut && !f.Missing)
+                {
+                    var longer = Backoff(f.Sends) * 2;
+                    if (longer > _backedOff) _backedOff = longer < MaxResendAfter ? longer : MaxResendAfter;
+                }
             }
         }
 
@@ -113,8 +128,12 @@ public sealed class ReliableSender
             bool acked = ahead < 0 || (ahead >= 1 && ahead <= 64 && (later & (1UL << (ahead - 1))) != 0);
             if (acked)
             {
-                // Only fragments sent once give a clean round trip.
-                if (f.Sends == 1) Measure(now - f.SentAt);
+                // Only fragments sent once give a clean round trip; one does, and the backed-off wait is over.
+                if (f.Sends == 1)
+                {
+                    Measure(now - f.SentAt);
+                    _backedOff = TimeSpan.Zero;
+                }
                 _waiting.RemoveAt(i--);
             }
             else if (f.Sends > 0 && highest is { } h && (int)(f.Sequence - h) < 0)
