@@ -46,7 +46,7 @@ File transfer, clipboard sync, chat, sound, session recording, more than one mon
 | CPU on the remote PC, office work | ≤ 5 % with a hardware encoder; ≤ 20 % without | Task Manager, 5 minutes |
 | Still screen | ≤ 1 % CPU and ≤ 50 kbps | Task Manager and toolbar |
 | Memory | ≤ 150 MB on each PC | Task Manager |
-| Bad network | Usable at 300 ms ± 100 ms jitter and 5 % loss; no freeze longer than 1 s | `Sheron.Sim` |
+| Bad network | Usable at 300 ms ± 100 ms jitter (round trip, as ping shows it) and 5 % loss; no freeze longer than 1 s | `Sheron.Sim` |
 | Reconnect | ≤ 5 s after the network drops and comes back | Turn the hotspot off and on |
 | UDP blocked | Falls back to TCP 443 by itself within 3 s | Firewall rule that blocks UDP |
 | Windows versions | Windows 10 (1809 or newer) and Windows 11, 64-bit | Test PCs |
@@ -86,6 +86,7 @@ File transfer, clipboard sync, chat, sound, session recording, more than one mon
 | 1 Nov | Logo: idea 10 "Wordmark", the name with its o drawn as a small screen (Sher). Drawn for the working name; redrawn if the product name changes (open decision 6) |
 | 1 Nov | Server: Oracle Cloud (Always Free) with Oracle Linux 9, the free CentOS-family system (CentOS Linux itself gets no more security updates). Replaces Alibaba Cloud Hong Kong from 25 Oct. Region chosen at sign-up; Singapore recommended (202 ms average in the 25 Oct test, the best measured) (Sher) |
 | 2 Nov | Server while the app matures: Oracle Cloud Always Free only, kept simple and free; a paid server once Sheron is mature and tested. No domain for now: the app reaches the server by its IP address (open decision 3 moves to release) (Sher) |
+| 5 Nov | "Bad network" target: 300 ms ± 100 ms is the round trip (150 ms ± 50 ms each way), as ping shows it, like the other delay targets. At 300 ms each way (600 ms round trip) recovering from a lost frame takes about one round trip, 0.8–1.3 s, so that case is measured and recorded but not held to the 1 s limit (Sher) |
 | 4 Nov | IDs of 4 characters: digits first (0000–9999), then digits and letters once the digit IDs are used up. Connect with the ID alone: the person at the remote PC accepts; the one-time password is dropped; the fixed password stays for unattended access. Because 4-digit IDs are easy to guess: after 3 refused requests (Deny or no answer) a viewer's requests are refused for 10 minutes, and the server allows 20 ID lookups a minute per internet address (Sher; Claude advised 6 digits for fewer guesses, Sher chose 4) |
 | 1 Nov | Testing on a second PC uses one self-contained `Sheron.exe`: copy it over and double-click, no install, no .NET, no GitHub account on that PC. Until the home screen (Plan step 15) it opens a small start window: "Share this screen" or "View a PC" by IP address |
 

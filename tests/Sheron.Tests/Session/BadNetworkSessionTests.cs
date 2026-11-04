@@ -10,8 +10,10 @@ using Xunit.Abstractions;
 namespace Sheron.Tests.Session;
 
 /// <summary>
-/// Plan step 10 "Done when" (TRD › Automatic quality): a real-time session through the network simulator at
-/// 300 ms ± 100 ms each way and 5 % loss each way stays usable, with no freeze longer than 1 s. The remote PC's side
+/// Plan step 10 "Done when" (TRD › Automatic quality): a real-time session through the network simulator at a
+/// 300 ms ± 100 ms round trip (150 ms ± 50 ms each way; PRD decision 5 Nov) and 5 % loss each way stays usable, with no
+/// freeze longer than 1 s. The same at 300 ms ± 100 ms each way is run and its longest freeze recorded: there a lost frame
+/// costs about a round trip, 0.8–1.3 s. The remote PC's side
 /// sends frames as automatic quality sets them (sizes from the bitrate and fps) and a keyframe on request; the viewer
 /// shows only frames it could decode (after a gap, nothing until a keyframe) and asks for a keyframe as the app does.
 /// </summary>
@@ -21,11 +23,27 @@ public class BadNetworkSessionTests(ITestOutputHelper output)
     private static readonly TimeSpan Run = TimeSpan.FromSeconds(20);
 
     [Fact]
-    public void At_300_ms_plus_or_minus_100_and_5_percent_loss_the_picture_never_freezes_for_a_second()
+    public void At_a_300_ms_round_trip_and_5_percent_loss_the_picture_never_freezes_for_a_second()
+    {
+        var longest = RunSession(TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(50));
+        Assert.True(longest < TimeSpan.FromSeconds(1), $"a freeze of {longest.TotalMilliseconds:0} ms");
+    }
+
+    [Fact]
+    public void At_300_ms_each_way_the_session_stays_usable_and_the_longest_freeze_is_recorded()
+    {
+        var longest = RunSession(TimeSpan.FromMilliseconds(300), TimeSpan.FromMilliseconds(100));
+        // Recorded, not held to 1 s (PRD decision 5 Nov); a freeze this long would mean the picture never came back.
+        Assert.True(longest < TimeSpan.FromSeconds(5), $"a freeze of {longest.TotalMilliseconds:0} ms");
+    }
+
+    /// <summary>One 20 s session at this delay ± jitter each way and 5 % loss each way; returns the longest freeze.</summary>
+    private TimeSpan RunSession(TimeSpan delay, TimeSpan jitter)
     {
         var net = new SimNetwork(seed: 300);
         var internet = net.AddSite("internet", null);
-        net.Impair(internet, internet, new LinkImpairment(TimeSpan.FromMilliseconds(300), TimeSpan.FromMilliseconds(100), 0.05));
+        net.Impair(internet, internet, new LinkImpairment(delay, jitter, 0.05));
+        output.WriteLine($"{delay.TotalMilliseconds:0} ms ± {jitter.TotalMilliseconds:0} ms each way, 5 % loss each way");
         using var hostUdp = net.Bind(internet, new IPEndPoint(IPAddress.Parse("10.1.1.1"), 47920));
         using var viewerUdp = net.Bind(internet, new IPEndPoint(IPAddress.Parse("10.2.2.2"), 50000));
         using var hostKey = DeviceKey.Create();
@@ -140,11 +158,11 @@ public class BadNetworkSessionTests(ITestOutputHelper output)
         output.WriteLine("Pauses over 300 ms: " + string.Join("; ", times.Zip(times.Skip(1), (a, b) => (a, b))
             .Where(p => p.b - p.a > TimeSpan.FromMilliseconds(300)).Select(p => $"{p.a.TotalSeconds:0.00} s +{(p.b - p.a).TotalMilliseconds:0} ms")));
 
-        Assert.True(longest < TimeSpan.FromSeconds(1), $"a freeze of {longest.TotalMilliseconds:0} ms");
         Assert.True(times.Count >= 10 * Run.TotalSeconds, $"only {times.Count} frames shown");
         Assert.Equal(0, inputsOutOfOrder);
         Assert.True(v.ClockKnown);
-        Assert.InRange(medianDelay, 150, 900);
+        Assert.InRange(medianDelay, delay.TotalMilliseconds * 0.5, delay.TotalMilliseconds * 3);
+        return longest;
     }
 
     private static bool Within(Func<bool> condition, int ms)
