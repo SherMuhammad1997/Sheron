@@ -455,6 +455,8 @@ Plan step 12 check: through the simulator, two PCs at different sites connect di
 
 Plan step 14 check: Sher's laptop on the iPhone hotspot connects by ID to a second PC on another network; both windows show Direct or Relay.
 
+Part done 4 Nov: by ID with both laptops on the iPhone hotspot, the second laptop found 713 152 388 through the server, the key matched, the viewer was let in and saw the picture (1920 × 1200, hardware decoding); path Direct across the hotspot (172.20.10.4), 7.6 ms round trip. Still to do: the two laptops on different networks.
+
 ## Risks
 
 | # | Risk | What we do |
