@@ -5,42 +5,6 @@ using System.Text;
 namespace Sheron.Core.Security;
 
 /// <summary>
-/// The one-time password a PC shows (TRD › Security): 8 characters from the 31 with no look-alikes, new after every
-/// session that was let in.
-/// </summary>
-public static class OneTimePassword
-{
-    public const int Length = 8;
-
-    /// <summary>Digits 2–9 and capital letters except I, L and O.</summary>
-    public const string Alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
-
-    public static string New() => new(RandomNumberGenerator.GetItems<char>(Alphabet, Length));
-
-    /// <summary>For people: two groups of four, such as "K7PQ 3MXA".</summary>
-    public static string Show(string password) => password.Length == Length ? $"{password[..4]} {password[4..]}" : password;
-
-    /// <summary>As typed: spaces and dashes left out, letters made capital. Null when it cannot be a one-time password.</summary>
-    public static string? Normalize(string typed)
-    {
-        var plain = new StringBuilder(Length);
-        foreach (char c in typed)
-        {
-            if (c is ' ' or '-') continue;
-            char upper = char.ToUpperInvariant(c);
-            if (!Alphabet.Contains(upper) || plain.Length == Length) return null;
-            plain.Append(upper);
-        }
-        return plain.Length == Length ? plain.ToString() : null;
-    }
-
-    /// <summary>Compared in fixed time, so the time taken says nothing about how much was right.</summary>
-    public static bool Matches(string typed, string password) =>
-        Normalize(typed) is { } plain
-        && CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(plain), Encoding.ASCII.GetBytes(password));
-}
-
-/// <summary>
 /// The fixed password for unattended access, kept only as a hash (TRD › Security): PBKDF2-SHA256, 600,000 rounds,
 /// 16-byte salt.
 /// </summary>

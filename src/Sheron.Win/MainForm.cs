@@ -24,7 +24,8 @@ internal sealed class MainForm : Form
 
     private readonly TextBox _address = new() { BorderStyle = BorderStyle.FixedSingle, PlaceholderText = "ID, or IP address" };
     // The password is never put on the command line, where other programs can read it (TRD › Connect by IP).
-    private readonly TextBox _password = new() { BorderStyle = BorderStyle.FixedSingle, PlaceholderText = "Password", UseSystemPasswordChar = true };
+    // Only for unattended access (PRD F5); empty asks the person at the remote PC (PRD decision 4 Nov).
+    private readonly TextBox _password = new() { BorderStyle = BorderStyle.FixedSingle, PlaceholderText = "Password (unattended)", UseSystemPasswordChar = true };
     private readonly bool _hardwareDecoder;
     private readonly Font _titleFont = new("Segoe UI Semibold", 15f);
     private readonly Font _buttonFont = new("Segoe UI Semibold", 12f);
@@ -99,11 +100,11 @@ internal sealed class MainForm : Form
             new Point(margin, LogicalToDeviceUnits(56)), Muted);
 
         DrawButton(g, _shareButton, "Share this screen");
-        TextRenderer.DrawText(g, "Use this on the PC to be viewed. Its window shows the password, asks you before anyone views, and stops when closed.", _textFont,
+        TextRenderer.DrawText(g, "Use this on the PC to be viewed. Its window shows this PC's ID, asks you before anyone views, and stops when closed.", _textFont,
             Rectangle.Inflate(new Rectangle(_shareButton.Left, _shareButton.Top + _shareButton.Height / 2, _shareButton.Width, _shareButton.Height / 2), -LogicalToDeviceUnits(16), 0),
             Muted, Wrapped);
 
-        TextRenderer.DrawText(g, "View a PC: type the ID (or IP address) and password its sharing window shows", _textFont,
+        TextRenderer.DrawText(g, "View a PC: type the ID (or IP address) its sharing window shows. Password only for unattended access", _textFont,
             new Point(margin, _address.Top - LogicalToDeviceUnits(28)), Ink);
         DrawButton(g, _viewButton, "View");
 
@@ -151,18 +152,11 @@ internal sealed class MainForm : Form
         IPEndPoint? remote = null;
         if (!byId && (!IPEndPoint.TryParse(typed, out remote) || remote.Address.Equals(IPAddress.Any)))
         {
-            _problem = $"\"{typed}\" is neither a 9-digit ID nor an IP address. Type it as the sharing window shows it, such as 713 152 388.";
+            _problem = $"\"{typed}\" is neither a 4-character ID nor an IP address. Type it as the sharing window shows it, such as 4821.";
             Invalidate();
             return;
         }
         if (remote is { Port: 0 }) remote.Port = Link.DefaultPort;
-        if (_password.Text.Length == 0)
-        {
-            _problem = "Type the password the sharing window shows.";
-            Invalidate();
-            _password.Focus();
-            return;
-        }
         if (System.Text.Encoding.UTF8.GetByteCount(_password.Text) > byte.MaxValue)
         {
             _problem = "That password is too long.";

@@ -37,7 +37,7 @@ internal static class Program
     {
         string? text = ValueAfter(args, "--view");
         if (text is null || (!Core.Rendezvous.RendezvousWire.TryParseId(text, out _) && !IPEndPoint.TryParse(text, out _)))
-            return Refuse("Give the remote PC's ID or address after --view, such as --view 713152388 or --view 192.168.1.20.");
+            return Refuse("Give the remote PC's ID or address after --view, such as --view 4821 or --view 192.168.1.20.");
         return new MainForm(text, hardwareDecoder);
     }
 

@@ -37,6 +37,7 @@ internal sealed class RendezvousServer : IAsyncDisposable
     private readonly CancellationTokenSource _stopping = new();
     private readonly ConcurrentDictionary<uint, Connection> _online = new();
     private readonly ConcurrentDictionary<IPAddress, Queue<DateTimeOffset>> _connectionsByIp = new();
+    private readonly ConcurrentDictionary<IPAddress, Queue<DateTimeOffset>> _findsByIp = new();
     private readonly IPacketTransport? _udp;
     private readonly ConcurrentDictionary<string, Connection> _byToken = new();
     private readonly ConcurrentDictionary<string, Relay> _relays = new();
@@ -216,7 +217,8 @@ internal sealed class RendezvousServer : IAsyncDisposable
     /// <summary>Introduces two PCs: Found to the asker, Incoming to the target, with one connect ID.</summary>
     private async Task Find(Connection asker, uint id)
     {
-        if (!asker.AllowFind(_options.FindsPerMinute))
+        // Per connection and per internet address: 4-character IDs are few, so they must not be tried quickly (TRD › Requests).
+        if (!asker.AllowFind(_options.FindsPerMinute) || !WithinLimit(_findsByIp, asker.Ip, _options.FindsPerMinute))
         {
             await NotFound(asker, id, NotFoundReason.TooManyTries).ConfigureAwait(false);
             return;
@@ -368,14 +370,17 @@ internal sealed class RendezvousServer : IAsyncDisposable
         asker.SendAsync(RendezvousType.NotFound, (byte[])[.. RendezvousWire.Id(id), (byte)reason], _stopping.Token);
 
     /// <summary>At most so many new connections a minute from one IP address.</summary>
-    private bool AllowConnection(IPAddress ip)
+    private bool AllowConnection(IPAddress ip) => WithinLimit(_connectionsByIp, ip, _options.ConnectionsPerMinutePerIp);
+
+    /// <summary>Counts one more for <paramref name="ip"/>; false (and not counted) when it already had <paramref name="perMinute"/> in the last minute.</summary>
+    private static bool WithinLimit(ConcurrentDictionary<IPAddress, Queue<DateTimeOffset>> counts, IPAddress ip, int perMinute)
     {
-        var times = _connectionsByIp.GetOrAdd(ip, _ => new Queue<DateTimeOffset>());
+        var times = counts.GetOrAdd(ip, _ => new Queue<DateTimeOffset>());
         lock (times)
         {
             var now = DateTimeOffset.UtcNow;
             while (times.Count > 0 && now - times.Peek() > TimeSpan.FromMinutes(1)) times.Dequeue();
-            if (times.Count >= _options.ConnectionsPerMinutePerIp) return false;
+            if (times.Count >= perMinute) return false;
             times.Enqueue(now);
             return true;
         }

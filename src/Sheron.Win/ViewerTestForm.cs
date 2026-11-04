@@ -444,10 +444,11 @@ internal sealed class ViewerTestForm : DevForm
         {
             AccessResult.AskPerson => ($"Waiting for the person at the remote PC to accept ({Math.Max(0, Math.Ceiling(answer.Seconds - waited))} s)", Accent),
             AccessResult.Wrong when answer.TriesLeft > 0 =>
-                ($"Wrong password · {answer.TriesLeft} {(answer.TriesLeft == 1 ? "try" : "tries")} left · close this window to try again", Bad),
+                ($"Wrong unattended password · {answer.TriesLeft} {(answer.TriesLeft == 1 ? "try" : "tries")} left · close this window to try again", Bad),
             AccessResult.Wrong => ($"Wrong password · that PC is locked for {answer.Seconds} s", Bad),
             AccessResult.Locked => ($"That PC is locked for {Math.Max(0, Math.Ceiling(answer.Seconds - waited))} s after 3 wrong passwords", Bad),
             AccessResult.Denied => ("The person at the remote PC said no", Bad),
+            AccessResult.TooManyRequests => ($"That PC said no 3 times: it takes no requests from this PC for {Math.Max(1, Math.Ceiling(answer.Seconds / 60.0))} min", Bad),
             AccessResult.NoAnswer => ("Nobody at the remote PC answered in 30 s", Bad),
             _ => null,
         };

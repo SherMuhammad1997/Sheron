@@ -20,15 +20,15 @@ namespace Sheron.Win;
 /// <summary>
 /// Developer window for Plan steps 8–9, 16 and 14 on the remote PC: lets one viewer see this screen and use its mouse
 /// and keyboard, and shows who is viewing and when they last used the input. Viewers reach it by this PC's ID through
-/// the Sheron server (TRD › Connect by ID), or by IP on the same network. A viewer needs the one-time password shown
-/// here, and the person here must Accept (TRD › Passwords and consent); the fixed password lets in with nobody asked.
-/// Sharing and control last only while this window is open; there is no hidden mode (CLAUDE.md › Hard rules).
+/// the Sheron server (TRD › Connect by ID), or by IP on the same network. The person here must Accept each viewer
+/// (TRD › Passwords and consent; PRD decision 4 Nov); the fixed password lets in with nobody asked. Sharing and control
+/// last only while this window is open; there is no hidden mode (CLAUDE.md › Hard rules).
 /// Open with <c>Sheron.Win.exe --host [--port 47920]</c>.
 /// </summary>
 internal sealed class HostTestForm : DevForm
 {
     /// <summary>Top of the request panel at 96 DPI, below the figures.</summary>
-    private const int RequestTop = 278;
+    private const int RequestTop = 254;
     private const int RequestHeight = 76;
     private static readonly Color Panel = Color.FromArgb(0x15, 0x1E, 0x28);
     private static readonly Color PanelHover = Color.FromArgb(0x1C, 0x28, 0x36);
@@ -69,8 +69,8 @@ internal sealed class HostTestForm : DevForm
     private double _megabitsPerSecond;
 
     public HostTestForm(int port, bool allowHardwareEncoder = true)
-        : base("sharing this screen (developer)", "Sharing this screen · a viewer needs the one-time password and your OK · close this window to stop",
-            new Size(1040, 372), headerHeight: 372, rowsPerColumn: 9, withVideo: false)
+        : base("sharing this screen (developer)", "Sharing this screen · a viewer needs this PC's ID and your OK · close this window to stop",
+            new Size(1040, 348), headerHeight: 348, rowsPerColumn: 9, withVideo: false)
     {
         _port = port;
         _allowHardwareEncoder = allowHardwareEncoder;
@@ -186,7 +186,7 @@ internal sealed class HostTestForm : DevForm
         }
     }
 
-    /// <summary>A viewer with the one-time password: the person here is asked, in this window, which comes to the front.</summary>
+    /// <summary>A viewer asks to connect: the person here is asked, in this window, which comes to the front.</summary>
     private void ShowRequest(ConsentRequest request)
     {
         _request = request;
@@ -263,7 +263,6 @@ internal sealed class HostTestForm : DevForm
         // Left column: who, and how to reach this PC.
         yield return ("Status", status.Text, status.Color);
         yield return ("This PC's ID", client is { Id: not 0 } ? RendezvousWire.Show(client.Id) : "–", Accent);
-        yield return ("One-time password", _gate is null ? "–" : OneTimePassword.Show(_gate.OneTimePassword), Accent);
         yield return ("Server", _server, _serverBad ? Bad : null);
         yield return ("This PC", $"{_addresses} · port {_port}", null);
         yield return ("This PC's key", _key is null ? "–" : KeyFingerprint.Show(_key.Fingerprint), null);

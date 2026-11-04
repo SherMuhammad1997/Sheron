@@ -7,9 +7,9 @@ using Sheron.Core.Session;
 namespace Sheron.Tests.Session;
 
 /// <summary>
-/// Plan step 16 with two links on this machine (TRD › Passwords and consent): PRD A3 (the person is asked; Deny
-/// and no answer refuse) and A9 (three wrong passwords lock even the right one), the fixed password, and nothing
-/// getting through before the viewer is let in.
+/// Plan steps 16 and 16b with two links on this machine (TRD › Passwords and consent): PRD A3 (the person is asked;
+/// Deny and no answer refuse) and A9 (three wrong passwords lock even the right one; three refused requests stop a
+/// viewer's requests), the fixed password, and nothing getting through before the viewer is let in.
 /// </summary>
 [Collection(Timing.Name)]
 public class AccessTests : IDisposable
@@ -75,9 +75,9 @@ public class AccessTests : IDisposable
     }
 
     [Fact]
-    public void The_one_time_password_asks_the_person_and_Accept_lets_the_viewer_in()
+    public void With_no_password_the_person_is_asked_and_Accept_lets_the_viewer_in()
     {
-        var (link, access) = Viewer(OneTimePassword.Show(_gate.OneTimePassword));
+        var (link, access) = Viewer("");
 
         var asking = WaitFor(access, AccessResult.AskPerson);
         Assert.Equal(1, asking.Seconds);   // the test's 1 s; 30 s in the app
@@ -106,7 +106,7 @@ public class AccessTests : IDisposable
     [Fact]
     public void Deny_refuses_the_viewer()
     {
-        var (_, access) = Viewer(_gate.OneTimePassword);
+        var (_, access) = Viewer("");
         WaitFor(access, AccessResult.AskPerson);
         Assert.True(_asked.TryDequeue(out var request));
 
@@ -120,7 +120,7 @@ public class AccessTests : IDisposable
     [Fact]
     public void With_no_answer_the_request_is_refused_when_its_time_is_up()
     {
-        var (_, access) = Viewer(_gate.OneTimePassword);
+        var (_, access) = Viewer("");
         WaitFor(access, AccessResult.AskPerson);
 
         WaitFor(access, AccessResult.NoAnswer);
@@ -151,25 +151,27 @@ public class AccessTests : IDisposable
         Assert.Equal(new AccessAnswer(AccessResult.Wrong, 0, 30), access.Answer);
 
         // A new viewer with the right password is locked out too.
-        var (_, second) = Viewer(_gate.OneTimePassword);
+        var (_, second) = Viewer("");
         var locked = WaitFor(second, AccessResult.Locked);
         Assert.InRange(locked.Seconds, 29, 30);
         Assert.Empty(_asked);
     }
 
     [Fact]
-    public void A_new_one_time_password_is_made_when_a_session_that_was_let_in_ends()
+    public void A_viewer_denied_three_times_gets_no_more_requests_through_and_nobody_is_asked()
     {
-        string first = _gate.OneTimePassword;
-        var (link, access) = Viewer(first);
-        WaitFor(access, AccessResult.AskPerson);
-        Assert.True(_asked.TryDequeue(out var request));
-        request!.Accept();
-        WaitFor(access, AccessResult.LetIn);
+        for (int i = 0; i < 3; i++)
+        {
+            var (_, access) = Viewer("");
+            WaitFor(access, AccessResult.AskPerson);
+            Assert.True(_asked.TryDequeue(out var request));
+            request!.Deny();
+            WaitFor(access, AccessResult.Denied);
+        }
 
-        // The viewer goes; the remote PC hears nothing for the timeout and ends the session.
-        link.Dispose();
-        Assert.True(Within(() => _gate.OneTimePassword != first));
-        Assert.False(_access.IsLetIn);
+        var (_, fourth) = Viewer("");
+        var refused = WaitFor(fourth, AccessResult.TooManyRequests);
+        Assert.InRange(refused.Seconds, 590, 600);
+        Assert.Empty(_asked);
     }
 }

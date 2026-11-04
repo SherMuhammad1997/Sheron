@@ -4,8 +4,9 @@ using Sheron.Core.Rendezvous;
 namespace Sheron.Server;
 
 /// <summary>
-/// The server's one file of devices (TRD › Server › Rendezvous protocol): 9-digit ID, device public key and last-seen
-/// time. The same key always gets the same ID; IDs are random and never reused. Thread-safe.
+/// The server's one file of devices (TRD › Server › Rendezvous protocol): ID, device public key and last-seen time. The
+/// same key always gets the same ID; IDs are random and never reused: 4 digits while any are free, then with letters
+/// (PRD decision 4 Nov). Lines with an ID of another form (the 9-digit IDs before 4 Nov) are dropped. Thread-safe.
 /// </summary>
 internal sealed class IdRegistry
 {
@@ -58,14 +59,26 @@ internal sealed class IdRegistry
                 _byId[known] = (publicKey, now.ToUnixTimeSeconds());
                 return known;
             }
-            uint id;
-            do id = (uint)RandomNumberGenerator.GetInt32((int)RendezvousWire.FirstId, (int)RendezvousWire.LastId + 1);
-            while (_byId.ContainsKey(id));
+            uint id = NewId();
             _idByKey[hex] = id;
             _byId[id] = (publicKey, now.ToUnixTimeSeconds());
             SaveLocked();
             return id;
         }
+    }
+
+    /// <summary>A free ID at random: one of digits only while any is free, then one with letters.</summary>
+    private uint NewId()
+    {
+        if (_byId.Keys.Count(RendezvousWire.IsDigitsOnly) < RendezvousWire.DigitIds)
+        {
+            var free = Enumerable.Range(0, RendezvousWire.DigitIds).Select(RendezvousWire.DigitId).Where(id => !_byId.ContainsKey(id)).ToList();
+            return free[RandomNumberGenerator.GetInt32(free.Count)];
+        }
+        uint other;
+        do other = (uint)RandomNumberGenerator.GetInt32(1, (int)RendezvousWire.IdCount + 1);
+        while (_byId.ContainsKey(other) || RendezvousWire.IsDigitsOnly(other));
+        return other;
     }
 
     public bool Knows(uint id)

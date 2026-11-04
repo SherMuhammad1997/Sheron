@@ -5,7 +5,7 @@ using Sheron.Core.Security;
 namespace Sheron.Core.Session;
 
 /// <summary>
-/// A viewer with the one-time password, waiting for the person at the remote PC (TRD › Passwords and consent).
+/// A viewer waiting for the person at the remote PC to accept (TRD › Passwords and consent).
 /// <see cref="Accept"/> or <see cref="Deny"/> once; with no answer it is refused by itself when the time is up.
 /// </summary>
 public sealed class ConsentRequest
@@ -46,9 +46,9 @@ public sealed class ConsentRequest
 }
 
 /// <summary>
-/// The remote PC's side of letting a viewer in (Plan step 16, TRD › Passwords and consent): after the handshake it
-/// waits for Access request, checks the password with the <see cref="AccessGate"/>, asks the person for the
-/// one-time password, and answers the viewer. Until the viewer is let in, every other message is dropped; after,
+/// The remote PC's side of letting a viewer in (Plan steps 16 and 16b, TRD › Passwords and consent): after the handshake
+/// it waits for Access request, checks it with the <see cref="AccessGate"/>, asks the person when there is no
+/// password, and answers the viewer. Until the viewer is let in, every other message is dropped; after,
 /// they come out of <see cref="ControlReceived"/>. Events come on the link's thread, a timer's, or the caller's.
 /// </summary>
 public sealed class HostAccess : IDisposable
@@ -106,17 +106,16 @@ public sealed class HostAccess : IDisposable
     /// <summary>A control message from a viewer who is let in: input and keyframe requests.</summary>
     public event Action<byte[]>? ControlReceived;
 
-    private void OnSessionStarted() => NewSession(sessionWasLetIn: false);
+    private void OnSessionStarted() => NewSession();
 
-    private void OnSessionEnded() => NewSession(sessionWasLetIn: true);
+    private void OnSessionEnded() => NewSession();
 
     /// <summary>A session starts or ends: nothing carries over to the next viewer.</summary>
-    private void NewSession(bool sessionWasLetIn)
+    private void NewSession()
     {
         bool hadRequest;
         lock (_lock)
         {
-            if (sessionWasLetIn && _letIn) Gate.SessionEnded();
             _session++;
             _letIn = _checking = false;
             hadRequest = EndRequest();
@@ -143,8 +142,9 @@ public sealed class HostAccess : IDisposable
             session = _session;
         }
         ControlMessage.TryReadAccessRequest(message, out string password);
+        var viewer = _link.Snapshot().PeerFingerprint;
         // The fixed password takes one PBKDF2 (about 0.3 s): not on the link's thread.
-        _ = Task.Run(() => OnChecked(session, Gate.Check(password)));
+        _ = Task.Run(() => OnChecked(session, Gate.Check(password, viewer)));
     }
 
     private void OnChecked(int session, AccessCheck check)
@@ -186,8 +186,16 @@ public sealed class HostAccess : IDisposable
             if (_pending != request || request.Session != _session) return;
             EndRequest();
         }
-        if (result == AccessResult.LetIn) Let(request.Session);
-        else Answer(result, 0, TimeSpan.Zero);
+        if (result == AccessResult.LetIn)
+        {
+            Let(request.Session);
+        }
+        else
+        {
+            // Deny and no answer count against this viewer (TRD › Requests).
+            if (request.ViewerFingerprint is { } viewer) Gate.Refused(viewer);
+            Answer(result, 0, TimeSpan.Zero);
+        }
         ConsentEnded?.Invoke();
     }
 

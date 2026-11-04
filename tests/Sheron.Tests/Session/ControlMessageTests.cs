@@ -51,7 +51,10 @@ public class ControlMessageTests
         Assert.True(ControlMessage.TryReadAnswer(ControlMessage.Answer(answer), out var back));
         Assert.Equal(answer, back);
 
-        Assert.Throws<ArgumentException>(() => ControlMessage.AccessRequest(""));
+        // No password: ask the person (Plan step 16b).
+        Assert.True(ControlMessage.TryReadAccessRequest(ControlMessage.AccessRequest(""), out string none));
+        Assert.Equal("", none);
+        Assert.Throws<ArgumentException>(() => ControlMessage.AccessRequest(new string('x', 256)));
         Assert.False(ControlMessage.TryReadAccessRequest([(byte)ControlType.AccessRequest, 5, (byte)'a'], out _));   // shorter than its length
         Assert.False(ControlMessage.TryReadAccessRequest([(byte)ControlType.AccessRequest, 1, 0xFF], out _));       // not UTF-8
         Assert.False(ControlMessage.TryReadAnswer([(byte)ControlType.AccessAnswer, 9, 0, 0, 0], out _));            // unknown result

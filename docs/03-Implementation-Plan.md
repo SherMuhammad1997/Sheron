@@ -76,6 +76,7 @@ GATE 4: all 11 PRD acceptance checks pass
 | --- | --- | --- |
 | 15 | Screens from the design: home, session toolbar, incoming request, banner, settings (custom-painted) | Screens match the design canvas; Sher approves |
 | 16 | One-time and fixed passwords (PBKDF2), DPAPI secrets, 3 tries then 30 s lock | Unit tests pass; PRD A3 and A9 pass |
+| 16b | 4-character IDs (digits first, then letters) and connect by ID alone with Accept; request limits (added 4 Nov, PRD decision) | Unit tests pass; Sher's laptops get 4-character IDs and connect by ID with Accept, no password |
 | 17 | Unattended service: agent in the active session, lock screen, UAC, Ctrl+Alt+Del | PRD A5 passes |
 | 18 | Reconnect after a drop; Serilog logs; nothing secret in logs | Hotspot off and on → session back in ≤ 5 s; log check passes |
 | 19 | Installer (PRD open decision 4): app, service, policy for Ctrl+Alt+Del, fonts | Clean install and uninstall on a fresh Windows 10 and 11 PC |

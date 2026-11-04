@@ -18,8 +18,8 @@ A small Windows app that lets one PC see and control another PC from anywhere in
 
 | # | Feature | Detail |
 | --- | --- | --- |
-| F1 | ID and one-time password | The server gives each PC a 9-digit ID. An 8-character one-time password is shown and changes after every session |
-| F2 | Connect by ID | Type the partner ID, then the password, and the session opens. A Recent list keeps the last 10 PCs |
+| F1 | ID | The server gives each PC a 4-character ID: 4 digits while any are free (0000–9999), then digits and letters (no look-alikes). Changed 4 Nov: no one-time password |
+| F2 | Connect by ID | Type the partner ID and Connect; the person at the remote PC accepts and the session opens. A password is typed only for unattended access (F5). A Recent list keeps the last 10 PCs |
 | F3 | Accept or deny | Without a fixed password the remote PC shows a request; it denies by itself after 30 s |
 | F4 | View and control | Screen, mouse, keyboard, Ctrl+Alt+Del. The mouse pointer is drawn on the viewer's PC, so it never lags |
 | F5 | Unattended access | Fixed password set on the remote PC; works with nobody there, also on the lock screen and UAC prompts |
@@ -56,14 +56,14 @@ File transfer, clipboard sync, chat, sound, session recording, more than one mon
 | # | Check |
 | --- | --- |
 | A1 | Installed on two PCs, each shows its ID within 5 s of starting |
-| A2 | PC 1 connects to PC 2 by ID and one-time password, each on a different internet connection (for example hotspot and office line) |
+| A2 | PC 1 connects to PC 2 by ID (PC 2 accepts), each on a different internet connection (for example hotspot and office line) |
 | A3 | PC 2 shows the request; Deny blocks it; no answer denies it after 30 s |
 | A4 | Mouse, keyboard and Ctrl+Alt+Del work; the pointer feels instant |
 | A5 | Unattended: PC 2 is locked with nobody there; PC 1 connects with the fixed password and unlocks it |
 | A6 | The banner shows for the whole session; Disconnect on PC 2 ends it at once |
 | A7 | The same-network targets above are met (delay, CPU, still screen) |
 | A8 | With UDP blocked on PC 2, the session still connects (TCP 443) |
-| A9 | A wrong password 3 times locks that ID for 30 s |
+| A9 | A wrong fixed password 3 times locks that ID for 30 s; 3 refused requests from one PC stop that PC's requests for 10 minutes |
 | A10 | A Wireshark capture of our own link shows no readable screen data; server logs hold no passwords |
 | A11 | Field test from Sher's PC to a PC in Hong Kong or China; numbers recorded in `docs/02-TRD.md` |
 
@@ -86,6 +86,7 @@ File transfer, clipboard sync, chat, sound, session recording, more than one mon
 | 1 Nov | Logo: idea 10 "Wordmark", the name with its o drawn as a small screen (Sher). Drawn for the working name; redrawn if the product name changes (open decision 6) |
 | 1 Nov | Server: Oracle Cloud (Always Free) with Oracle Linux 9, the free CentOS-family system (CentOS Linux itself gets no more security updates). Replaces Alibaba Cloud Hong Kong from 25 Oct. Region chosen at sign-up; Singapore recommended (202 ms average in the 25 Oct test, the best measured) (Sher) |
 | 2 Nov | Server while the app matures: Oracle Cloud Always Free only, kept simple and free; a paid server once Sheron is mature and tested. No domain for now: the app reaches the server by its IP address (open decision 3 moves to release) (Sher) |
+| 4 Nov | IDs of 4 characters: digits first (0000–9999), then digits and letters once the digit IDs are used up. Connect with the ID alone: the person at the remote PC accepts; the one-time password is dropped; the fixed password stays for unattended access. Because 4-digit IDs are easy to guess: after 3 refused requests (Deny or no answer) a viewer's requests are refused for 10 minutes, and the server allows 20 ID lookups a minute per internet address (Sher; Claude advised 6 digits for fewer guesses, Sher chose 4) |
 | 1 Nov | Testing on a second PC uses one self-contained `Sheron.exe`: copy it over and double-click, no install, no .NET, no GitHub account on that PC. Until the home screen (Plan step 15) it opens a small start window: "Share this screen" or "View a PC" by IP address |
 
 ## Decisions still open — ask Sher

@@ -85,29 +85,75 @@ public static class RendezvousWire
     public const int TokenSize = 16;
     public const int PublicKeySize = 64;
     public const int SignatureSize = 64;
-    public const uint FirstId = 100_000_000;
-    public const uint LastId = 999_999_999;
+    /// <summary>The 33 characters of an ID: digits, then capital letters without I, L and O (TRD › Rendezvous › IDs).</summary>
+    public const string IdAlphabet = "0123456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
+    public const int IdLength = 4;
+
+    /// <summary>How many IDs there are: 33⁴.</summary>
+    public const uint IdCount = 33 * 33 * 33 * 33;
+
+    /// <summary>IDs of digits only, given out first: 0000–9999.</summary>
+    public const int DigitIds = 10_000;
 
     private static readonly byte[] RegisterLabel = Encoding.ASCII.GetBytes("Sheron 1 register");
 
     /// <summary>What a PC signs to register: the label, then the server's challenge.</summary>
     public static byte[] RegisterSigned(ReadOnlySpan<byte> challenge) => [.. RegisterLabel, .. challenge];
 
-    /// <summary>An ID as people read it: three groups of three digits.</summary>
+    /// <summary>
+    /// An ID as people read it: 4 characters, such as "4821" or "7K2A". On the wire an ID is 1 + its value in base 33,
+    /// so 0 never names a PC.
+    /// </summary>
     public static string Show(uint id)
     {
-        string digits = id.ToString("D9");
-        return $"{digits[..3]} {digits[3..6]} {digits[6..]}";
+        if (!IsId(id)) return "–";
+        uint value = id - 1;
+        var text = new char[IdLength];
+        for (int i = IdLength - 1; i >= 0; i--)
+        {
+            text[i] = IdAlphabet[(int)(value % 33)];
+            value /= 33;
+        }
+        return new string(text);
     }
 
-    public static bool IsId(uint id) => id is >= FirstId and <= LastId;
+    public static bool IsId(uint id) => id is >= 1 and <= IdCount;
 
-    /// <summary>An ID as typed: 9 digits, with or without the spaces it is shown with (or dashes).</summary>
+    /// <summary>The ID of the number <paramref name="n"/>, 0–9999, written in digits ("0042").</summary>
+    public static uint DigitId(int n)
+    {
+        if (n is < 0 or >= DigitIds) throw new ArgumentOutOfRangeException(nameof(n));
+        TryParseId(n.ToString("D4"), out uint id);
+        return id;
+    }
+
+    /// <summary>Is the ID digits only (one of the first 10,000 given out)?</summary>
+    public static bool IsDigitsOnly(uint id) => IsId(id) && Show(id).All(char.IsAsciiDigit);
+
+    /// <summary>
+    /// An ID as typed: 4 characters, either case, spaces and dashes ignored; O is read as 0, I and L as 1 (they are not
+    /// in IDs, so a slip still finds the right PC).
+    /// </summary>
     public static bool TryParseId(string text, out uint id)
     {
         id = 0;
-        string digits = new([.. text.Where(c => c is not (' ' or '-'))]);
-        return digits.Length == 9 && digits.All(char.IsAsciiDigit) && uint.TryParse(digits, out id) && IsId(id);
+        var chars = text.Where(c => c is not (' ' or '-')).Select(c => char.ToUpperInvariant(c) switch
+        {
+            'O' => '0',
+            'I' or 'L' => '1',
+            var other => other,
+        }).ToList();
+        if (chars.Count != IdLength) return false;
+        uint value = 0;
+        foreach (char c in chars)
+        {
+            int digit = IdAlphabet.IndexOf(c);
+            if (digit < 0) return false;
+            value = value * 33 + (uint)digit;
+        }
+        id = value + 1;
+        return true;
     }
 
     /// <summary>The pin of a server certificate: SHA-256 of its public key (SubjectPublicKeyInfo).</summary>

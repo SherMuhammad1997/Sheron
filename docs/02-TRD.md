@@ -192,7 +192,7 @@ Before the server exists (Plan steps 11–14), two PCs on the same network conne
 
 | Item | Rule |
 | --- | --- |
-| Remote PC | `Sheron.Win.exe --host [--port 47920]` opens a window that says the screen can be viewed and controlled, shows this PC's IP addresses, key fingerprint and one-time password, who is viewing, and when the viewer last used the mouse or keyboard. A viewer with the one-time password is shown there as a request with Accept and Deny (Plan step 16). Sharing and control last only while that window is open; there is no hidden mode |
+| Remote PC | `Sheron.Win.exe --host [--port 47920]` opens a window that says the screen can be viewed and controlled, shows this PC's ID, IP addresses and key fingerprint, who is viewing, and when the viewer last used the mouse or keyboard. Each viewer is shown there as a request with Accept and Deny (Plan steps 16, 16b); the fixed password lets in without one. Sharing and control last only while that window is open; there is no hidden mode |
 | Viewer | `Sheron.Win.exe --view <IP>[:port]` opens the start window with that address filled in, to type the password (never on the command line, where other programs can read it); the viewer window shows the remote screen and its figures |
 | Start window | Started with no switches, Sheron opens a small start window until the home screen exists (Plan step 15, PRD decision 1 Nov): "Share this screen" opens the remote PC's window; "View a PC" with an IP address and password typed in opens the viewer. Both choices drawn on the form; the IP and password boxes are the only real controls |
 | One file | `dotnet publish src/Sheron.Win -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeAllContentForSelfExtract=true -p:EnableCompressionInSingleFile=true` makes one `Sheron.exe` that holds .NET, the libraries and libvpl.dll and unpacks them to the user's temp folder when it starts. It is not signed yet (Plan step 20), so Windows SmartScreen asks first ("More info", "Run anyway") |
@@ -253,15 +253,16 @@ Measured 1 Nov on Sher's two laptops, both on an iPhone hotspot (each packet cro
 | Item | Rule |
 | --- | --- |
 | Device key | Each install makes an ECDSA P-256 key pair; the private key is protected with DPAPI (machine scope, so the service can use it) |
-| ID | The server gives a 9-digit ID tied to the device's public key |
+| ID | The server gives a 4-character ID tied to the device's public key (PRD decision 4 Nov; Rendezvous protocol › IDs) |
 | Key pinning | The viewer remembers the remote PC's key fingerprint on first connect and warns if it ever changes |
 | Session keys | New ECDH P-256 key per session, signed by both device keys; HKDF-SHA256 → AES-256-GCM, one key per direction; counter nonces; replay window |
 | End to end | The server only sees sealed packets and never has the session keys |
 | Server link | TLS 1.3, or 1.2 where Windows 10 has no 1.3; the server's certificate key is pinned in the app either way (Rendezvous protocol, below) |
-| One-time password | 8 characters from the 31 with no look-alikes: digits 2–9 and capital letters except I, L and O (no 0/O, 1/I/L; "32" before 1 Nov was a miscount). Shown as two groups of four; typed with or without the space, in either case. New after every session that was let in |
+| Connect by ID | The viewer needs only the ID; the person at the remote PC accepts or denies (PRD decision 4 Nov; the one-time password of Plan step 16 is gone) |
 | Fixed password | 8 to 64 characters. PBKDF2-SHA256, 600,000 rounds, 16-byte salt; only the hash is stored |
 | Password check | Only inside the encrypted channel |
-| Wrong password | 3 wrong passwords in a row, from any viewer, lock the remote PC's ID for 30 s: it refuses every password, the right one too. A right password resets the count. The server also limits tries (20 Find a minute) |
+| Wrong password | 3 wrong fixed passwords in a row, from any viewer, lock the remote PC's ID for 30 s: it refuses every password, the right one too. A right password resets the count |
+| Requests | 3 requests from one viewer (by its device key) refused within 10 minutes, by Deny or no answer, and that viewer's requests are refused for 10 minutes without asking the person. The server allows 20 Find a minute per connection and per internet address, so the 10,000 short IDs cannot be tried quickly |
 | Consent | Without a fixed password the person at the remote PC must Accept. The banner is always shown. There is no hidden or silent mode |
 | Logs | Never log passwords, keys or screen content |
 
@@ -271,23 +272,23 @@ After the session handshake the remote PC sends nothing and takes no input until
 
 | Step | What happens |
 | --- | --- |
-| 1 | The viewer sends Access request with the password typed |
-| 2 | Locked: answer Locked with the seconds left. The password is not checked and does not count |
-| 3 | It is the one-time password: the person at the remote PC is asked (incoming request: viewer's address and key, Accept, Deny). Answer Asking with 30 s. Accept: Let in. Deny: Denied. No answer within 30 s: No answer |
+| 1 | The viewer sends Access request: empty, or with the fixed password typed for unattended access |
+| 2 | Refused 3 times within 10 minutes: answer Too many requests with the seconds left, nobody asked. Locked: answer Locked with the seconds left; the password is not checked and does not count |
+| 3 | No password: the person at the remote PC is asked (incoming request: viewer's ID or address and key, Accept, Deny). Answer Asking with 30 s. Accept: Let in. Deny: Denied. No answer within 30 s: No answer. Deny and no answer count as refused for step 2 |
 | 4 | It is the fixed password: Let in at once, with nobody asked (unattended access) |
-| 5 | Neither: Wrong, with the tries left; the third in a row also starts the 30 s lock. The viewer may try again in the same session |
-| After | Let in: the remote PC starts capture and takes input. When that session ends, a new one-time password is made |
+| 5 | A password that is not the fixed one: Wrong, with the tries left; the third in a row also starts the 30 s lock. The viewer may try again in the same session |
+| After | Let in: the remote PC starts capture and takes input |
 
-The one-time password is checked first (it is cheap); the fixed password costs one PBKDF2 (about 0.3 s), done off the link's thread. Messages sent before the viewer is let in, other than Access request, are dropped.
+The fixed password costs one PBKDF2 (about 0.3 s), done off the link's thread. Messages sent before the viewer is let in, other than Access request, are dropped.
 
 | Control message | Byte 0 | Then |
 | --- | --- | --- |
-| Access request (viewer → remote PC) | 11 | Length (1 byte), the password in UTF-8 (1–255 bytes) |
-| Access answer (remote PC → viewer) | 12 | Result (1 byte: 1 let in, 2 asking the person, 3 wrong password, 4 locked, 5 denied, 6 no answer), tries left (1 byte), seconds (2 bytes: time left to answer, or lock time left) |
+| Access request (viewer → remote PC) | 11 | Length (1 byte), the password in UTF-8 (0–255 bytes; 0: no password, ask the person) |
+| Access answer (remote PC → viewer) | 12 | Result (1 byte: 1 let in, 2 asking the person, 3 wrong password, 4 locked, 5 denied, 6 no answer, 7 too many requests), tries left (1 byte), seconds (2 bytes: time left to answer, or lock time left) |
 
 **Secrets file** `%ProgramData%\Sheron\secrets.bin`: DPAPI, machine scope (so the service of Plan step 17 can read it), with "Sheron 1 secrets" as extra entropy. Inside: version (1 byte, 1); the device private key (2-byte length, PKCS#8); the fixed password (1 byte: 0 none, 1 set; then rounds (4 bytes), salt (16), hash (32)). Machine-scope DPAPI lets any program on the PC open it, so the file itself is only for SYSTEM, Administrators and the Windows user who made it (nothing inherited from the folder). It is written to a new file, then moved over the old one. A file that cannot be opened (for example copied from another PC) is kept as `secrets.bin.unreadable` and new secrets are made: a new device key, so a new ID.
 
-Plan step 16 check: unit tests for the password rules, the lock and the secrets format; session tests with two links on this machine: one-time password asks the person (Accept lets in, Deny and no answer refuse), the fixed password lets in at once, three wrong passwords lock even the right one for 30 s (PRD A3, A9). Windows tests for the DPAPI file. Then Sher checks A3 and A9 on his two laptops by IP.
+Plan step 16 check: unit tests for the password rules, the lock and the secrets format; session tests with two links on this machine: one-time password asks the person (Accept lets in, Deny and no answer refuse), the fixed password lets in at once, three wrong passwords lock even the right one for 30 s (PRD A3, A9). Windows tests for the DPAPI file. Then Sher checks A3 and A9 on his two laptops by IP. (The one-time password was replaced on 4 Nov by connect by ID with Accept, Plan step 16b.)
 
 Checked 2 Nov on Sher's two laptops over the iPhone hotspot, connected by IP: Accept let the viewer in, Deny and no answer for 30 s refused it (A3), and three wrong passwords locked out the right one for 30 s (A9). Each laptop kept its device key between runs (same fingerprint every time), so the secrets file works.
 
@@ -400,10 +401,10 @@ Sheron's own protocol between each PC and the server. The server only introduces
 | Server certificate | Made by the server on its first start (ECDSA P-256, self-signed, 10 years) and kept in its data folder; the server prints its pin so the app can be built with it |
 | Messages | 2-byte length (little-endian), then 1 byte type, then the body; at most 4,096 bytes. A malformed message closes the connection |
 | Registering | The server sends a challenge (32 random bytes). The PC answers Register: its device public key (64 bytes), its signature over "Sheron 1 register" + the challenge, and its addresses. The server checks the signature, then gives the ID tied to that key: the same key always gets the same ID |
-| IDs | 9 digits, 100 000 000 to 999 999 999, chosen at random and never reused. Shown in groups of three |
+| IDs | 4 characters from 33: digits 0–9 and capital letters except I, L and O (PRD decision 4 Nov). The server gives 4-digit IDs (0000–9999) at random while any are free, then IDs with letters; never reused. Typed in either case, with spaces or dashes ignored; O is read as 0 and I or L as 1. On the wire an ID is 4 bytes: 1 + its value in base 33, so 0 never names a PC. IDs of the 9-digit form (before 4 Nov) are dropped from the registry, and those PCs get new IDs |
 | Registry | One text file, one line per device: ID, public key (hex), last seen (Unix seconds). Rewritten whole on a new device (written to a new file, then moved over the old one) and every 5 minutes |
 | Addresses | Each PC sends its LAN addresses with the UDP port of its link socket; the server adds the public UDP address its address check saw (Plan step 12; none while UDP is blocked) |
-| Finding a PC | Find (a 9-digit ID): if that PC is online, the server makes a 16-byte connect ID and sends Found to the asker and Incoming to the target, each with the other's ID, device public key and addresses. The viewer then checks the handshake's host key against the key the server gave for that ID. Otherwise NotFound: unknown ID, or offline |
+| Finding a PC | Find (an ID): if that PC is online, the server makes a 16-byte connect ID and sends Found to the asker and Incoming to the target, each with the other's ID, device public key and addresses. The viewer then checks the handshake's host key against the key the server gave for that ID. Otherwise NotFound: unknown ID, or offline |
 | Staying online | The PC sends Ping every 25 s; the server answers Pong and drops a connection silent for 60 s. One connection per device: a new one replaces the old |
 | Limits | At most 20 Find a minute per connection and 30 new connections a minute per IP address; more are refused |
 
@@ -467,7 +468,7 @@ Plan step 12 check: through the simulator, two PCs at different sites connect di
 | Remote PC | The sharing window opens its UDP socket (47920), registers with the server (this PC's ID shows), runs the address check, and keeps the server's view of its UDP address fresh with an address check every 25 s. A lost server link is tried again every 10 s. Connect by IP keeps working on the same socket |
 | One socket, two readers | On the remote PC one thread reads the socket and hands each packet on by its first byte: rendezvous messages (0x30–0x35) to the connector, everything else to the session. While the connector is finding a path it also gets a copy of each Hello, to tell direct from relay. The session (Plan step 8 link) runs all the time, so a Hello on any path finds it. Only one viewer's path is worked out at a time |
 | TCP relay on the remote PC | When its UDP is blocked, the TCP relay is joined to the same session: packets from the relay come in beside the UDP ones, and packets to the relay's address go out over TLS. The relay's address is the server's IP with port 0, so it never mixes with the server's UDP address |
-| Viewer | "View a PC" with a 9-digit ID: the viewer window opens its own UDP socket, registers, runs the address check, finds the ID, works out the path (direct, relay, TCP 443), then starts the session on it. Unknown ID, offline, or too many tries are shown as such |
+| Viewer | "View a PC" with an ID: the viewer window opens its own UDP socket, registers, runs the address check, finds the ID, works out the path (direct, relay, TCP 443), then starts the session on it. Unknown ID, offline, or too many tries are shown as such |
 | Remote PC's key | The server gives the remote PC's device key with Found. The viewer checks the session handshake's key against it before sending the password; a different key stops the session with a warning, and the password is never sent |
 | Path shown | Both windows show the path: Direct (with the address), Relay through the server, or TCP 443 relay. This is what PRD A2 and the step 14 check look at; the toolbar of Plan step 15 shows it the same way |
 | One registration per PC | A PC registers once; a second window registering the same PC replaces the first. So the sharing window and a viewer window are not open together on one PC |

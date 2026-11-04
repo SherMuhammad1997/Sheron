@@ -2,38 +2,9 @@ using Sheron.Core.Security;
 
 namespace Sheron.Tests.Security;
 
-/// <summary>Plan step 16: the one-time password, the fixed password's hash, and the secrets record (TRD › Security).</summary>
+/// <summary>Plan step 16: the fixed password's hash and the secrets record (TRD › Security).</summary>
 public class PasswordTests
 {
-    [Fact]
-    public void A_one_time_password_is_8_characters_with_no_look_alikes()
-    {
-        Assert.Equal(31, OneTimePassword.Alphabet.Distinct().Count());
-        Assert.DoesNotContain(OneTimePassword.Alphabet, c => "0O1IL".Contains(c));
-        var seen = new HashSet<string>();
-        for (int i = 0; i < 200; i++)
-        {
-            string password = OneTimePassword.New();
-            Assert.Equal(8, password.Length);
-            Assert.All(password, c => Assert.Contains(c, OneTimePassword.Alphabet));
-            seen.Add(password);
-        }
-        Assert.Equal(200, seen.Count);
-    }
-
-    [Fact]
-    public void A_one_time_password_may_be_typed_in_small_letters_and_with_the_space_it_is_shown_with()
-    {
-        const string password = "K7PQ3MXA";
-        Assert.Equal("K7PQ 3MXA", OneTimePassword.Show(password));
-        Assert.True(OneTimePassword.Matches("K7PQ 3MXA", password));
-        Assert.True(OneTimePassword.Matches(" k7pq-3mxa ", password));
-        Assert.False(OneTimePassword.Matches("K7PQ3MXB", password));
-        Assert.False(OneTimePassword.Matches("K7PQ3MX", password));
-        Assert.False(OneTimePassword.Matches("K7PQ3MXAA", password));
-        Assert.False(OneTimePassword.Matches("", password));
-    }
-
     [Fact]
     public void The_fixed_password_is_kept_only_as_a_salted_hash_that_checks_it()
     {

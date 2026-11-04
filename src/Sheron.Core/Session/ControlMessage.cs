@@ -152,18 +152,21 @@ public static class ControlMessage
         return true;
     }
 
-    /// <summary>Access request: the password in UTF-8 after a 1-byte length. Secret: never log it.</summary>
+    /// <summary>
+    /// Access request: the password in UTF-8 after a 1-byte length; empty asks the person (Plan step 16b). Secret: never
+    /// log it.
+    /// </summary>
     public static byte[] AccessRequest(string password)
     {
         byte[] text = Encoding.UTF8.GetBytes(password);
-        if (text.Length is 0 or > byte.MaxValue) throw new ArgumentException("A password is 1–255 bytes in UTF-8.", nameof(password));
+        if (text.Length > byte.MaxValue) throw new ArgumentException("A password is at most 255 bytes in UTF-8.", nameof(password));
         return [(byte)ControlType.AccessRequest, (byte)text.Length, .. text];
     }
 
     public static bool TryReadAccessRequest(ReadOnlySpan<byte> message, out string password)
     {
         password = "";
-        if (message.Length < 3 || message[0] != (byte)ControlType.AccessRequest || message[1] == 0 || message.Length != 2 + message[1])
+        if (message.Length < 2 || message[0] != (byte)ControlType.AccessRequest || message.Length != 2 + message[1])
             return false;
         try
         {
