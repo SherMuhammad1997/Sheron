@@ -172,6 +172,8 @@ PRD A7, first figures, 5 Nov on Sher's two laptops, both on the iPhone hotspot (
 
 Plan step 10 check: through the network simulator in real time, a 300 ms ± 100 ms round trip (150 ms ± 50 ms each way; PRD decision 5 Nov) and 5 % loss each way, a session with automatic quality keeps showing frames with no gap over 1 s, and input arrives; the same at 300 ms ± 100 ms each way is run and its longest freeze recorded; then PRD A7 is measured on Sher's laptops on one network (delay capture → shown, CPU during office work, still screen CPU and data) and written here.
 
+Step 10 done 5 Nov: the round-trip case's longest freeze was 58 ms (59 fps shown); at 300 ms ± 100 ms each way, 91–120 ms in the runs so far. A7 still open: CPU over 5 minutes of office work, still-screen CPU, and the delay on a router or cable network.
+
 ## Input path
 
 | Item | Detail |
