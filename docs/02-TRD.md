@@ -279,7 +279,9 @@ After the session handshake the remote PC sends nothing and takes no input until
 | 5 | A password that is not the fixed one: Wrong, with the tries left; the third in a row also starts the 30 s lock. The viewer may try again in the same session |
 | After | Let in: the remote PC starts capture and takes input |
 
-The fixed password costs one PBKDF2 (about 0.3 s), done off the link's thread. Messages sent before the viewer is let in, other than Access request, are dropped.
+The fixed password costs one PBKDF2 (about 0.3 s), done off the link's thread.
+
+Plan step 16b check, 5 Nov on Sher's laptops (both on the iPhone hotspot): the updated server gave them the IDs 1920 and 3936; Sher's laptop viewed 3936 with no password, the second laptop accepted, and the session ran (Direct, 1920 × 1080, 0 lost frames; the remote PC showed the viewer as ID 1920). Messages sent before the viewer is let in, other than Access request, are dropped.
 
 | Control message | Byte 0 | Then |
 | --- | --- | --- |
