@@ -17,7 +17,9 @@ internal sealed record ServerOptions(
     TimeSpan RegisterTimeout,
     int FindsPerMinute,
     int ConnectionsPerMinutePerIp,
-    TimeSpan RelayIdle)
+    TimeSpan RelayIdle,
+    int StatusIdsPerMinute = 30,
+    int StatusIdsPerMinutePerIp = 60)
 {
     public static readonly ServerOptions Default = new(TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(10), 20, 30, TimeSpan.FromSeconds(60));
 }
@@ -38,6 +40,7 @@ internal sealed class RendezvousServer : IAsyncDisposable
     private readonly ConcurrentDictionary<uint, Connection> _online = new();
     private readonly ConcurrentDictionary<IPAddress, Queue<DateTimeOffset>> _connectionsByIp = new();
     private readonly ConcurrentDictionary<IPAddress, Queue<DateTimeOffset>> _findsByIp = new();
+    private readonly ConcurrentDictionary<IPAddress, Queue<DateTimeOffset>> _statusByIp = new();
     private readonly IPacketTransport? _udp;
     private readonly ConcurrentDictionary<string, Connection> _byToken = new();
     private readonly ConcurrentDictionary<string, Relay> _relays = new();
@@ -204,6 +207,12 @@ internal sealed class RendezvousServer : IAsyncDisposable
                 case { Type: RendezvousType.RelayJoin, Body: var body } when body.Length == RendezvousWire.ConnectIdSize + 1:
                     JoinOverTcp(connection, body);
                     break;
+                case { Type: RendezvousType.Busy, Body: [var flag and (0 or 1)] }:
+                    connection.Busy = flag == 1;
+                    break;
+                case { Type: RendezvousType.Status, Body: var body } when RendezvousWire.TryReadStatus(body, out var ids):
+                    await Status(connection, ids).ConfigureAwait(false);
+                    break;
                 case { Type: RendezvousType.RelaySend, Body: var packet }:
                     // After the relay ends (the other PC left) its last packets are dropped, not an error.
                     if (connection.TcpRelay is { } relay) Forward(relay, relay.Viewer == connection ? Role.Viewer : Role.Host, packet);
@@ -218,7 +227,7 @@ internal sealed class RendezvousServer : IAsyncDisposable
     private async Task Find(Connection asker, uint id)
     {
         // Per connection and per internet address: 4-character IDs are few, so they must not be tried quickly (TRD › Requests).
-        if (!asker.AllowFind(_options.FindsPerMinute) || !WithinLimit(_findsByIp, asker.Ip, _options.FindsPerMinute))
+        if (!asker.AllowFind(_options.FindsPerMinute, 1) || !WithinLimit(_findsByIp, asker.Ip, _options.FindsPerMinute))
         {
             await NotFound(asker, id, NotFoundReason.TooManyTries).ConfigureAwait(false);
             return;
@@ -231,6 +240,12 @@ internal sealed class RendezvousServer : IAsyncDisposable
         if (!_online.TryGetValue(id, out var target))
         {
             await NotFound(asker, id, NotFoundReason.Offline).ConfigureAwait(false);
+            return;
+        }
+        // One session at a time (TRD › Connect by ID): a PC in a session is not told about anyone.
+        if (target.Busy)
+        {
+            await NotFound(asker, id, NotFoundReason.Busy).ConfigureAwait(false);
             return;
         }
 
@@ -250,6 +265,20 @@ internal sealed class RendezvousServer : IAsyncDisposable
         await asker.SendAsync(RendezvousType.Found,
             RendezvousWire.Peer(new PeerInfo(connectId, target.Id, target.PublicKey, target.Addresses)), _stopping.Token).ConfigureAwait(false);
         Log?.Invoke($"{RendezvousWire.Show(asker.Id)} found {RendezvousWire.Show(target.Id)}");
+    }
+
+    /// <summary>
+    /// Which of these IDs are online, for the Recent list. Each ID counts against its own limits, per connection and
+    /// per internet address; over them, every ID is answered "not checked".
+    /// </summary>
+    private async Task Status(Connection asker, List<uint> ids)
+    {
+        bool allowed = asker.AllowStatus(_options.StatusIdsPerMinute, ids.Count)
+            && WithinLimit(_statusByIp, asker.Ip, _options.StatusIdsPerMinutePerIp, ids.Count);
+        var states = ids.Select(id => (id, !allowed ? PcState.NotChecked
+            : id != asker.Id && _online.TryGetValue(id, out var pc) ? (pc.Busy ? PcState.Busy : PcState.Online)
+            : PcState.Offline)).ToList();
+        await asker.SendAsync(RendezvousType.StatusAnswer, RendezvousWire.StatusAnswer(states), _stopping.Token).ConfigureAwait(false);
     }
 
     /// <summary>The viewer found no direct path: tell the remote PC to join the relay too.</summary>
@@ -372,19 +401,12 @@ internal sealed class RendezvousServer : IAsyncDisposable
     /// <summary>At most so many new connections a minute from one IP address.</summary>
     private bool AllowConnection(IPAddress ip) => WithinLimit(_connectionsByIp, ip, _options.ConnectionsPerMinutePerIp);
 
-    /// <summary>Counts one more for <paramref name="ip"/>; false (and not counted) when it already had <paramref name="perMinute"/> in the last minute.</summary>
-    private static bool WithinLimit(ConcurrentDictionary<IPAddress, Queue<DateTimeOffset>> counts, IPAddress ip, int perMinute)
-    {
-        var times = counts.GetOrAdd(ip, _ => new Queue<DateTimeOffset>());
-        lock (times)
-        {
-            var now = DateTimeOffset.UtcNow;
-            while (times.Count > 0 && now - times.Peek() > TimeSpan.FromMinutes(1)) times.Dequeue();
-            if (times.Count >= perMinute) return false;
-            times.Enqueue(now);
-            return true;
-        }
-    }
+    /// <summary>
+    /// Counts <paramref name="count"/> more for <paramref name="ip"/>; false (and not counted) when that would make more
+    /// than <paramref name="perMinute"/> in the last minute.
+    /// </summary>
+    private static bool WithinLimit(ConcurrentDictionary<IPAddress, Queue<DateTimeOffset>> counts, IPAddress ip, int perMinute, int count = 1) =>
+        Connection.Allow(counts.GetOrAdd(ip, _ => new Queue<DateTimeOffset>()), perMinute, count);
 
     public async ValueTask DisposeAsync()
     {
@@ -405,6 +427,7 @@ internal sealed class RendezvousServer : IAsyncDisposable
 
         private readonly SemaphoreSlim _writing = new(1, 1);
         private readonly Queue<DateTimeOffset> _finds = new();
+        private readonly Queue<DateTimeOffset> _statusIds = new();
         private readonly Channel<byte[]> _relayed = Channel.CreateBounded<byte[]>(
             new BoundedChannelOptions(RelayQueue) { SingleReader = true, FullMode = BoundedChannelFullMode.DropWrite });
         private int _delivering;
@@ -420,19 +443,26 @@ internal sealed class RendezvousServer : IAsyncDisposable
         public volatile IPEndPoint? PublicUdp;
         /// <summary>The relay this PC joined over TLS, if any.</summary>
         public volatile Relay? TcpRelay;
+        /// <summary>In a session: nobody is introduced to it (TRD › Connect by ID › One session at a time).</summary>
+        public volatile bool Busy;
 
         /// <summary>LAN addresses, and the checked public UDP address when there is one.</summary>
         public IReadOnlyList<PeerAddress> Addresses =>
             PublicUdp is { } seen ? [.. Lan, new PeerAddress(AddressKind.Public, seen)] : Lan;
 
-        public bool AllowFind(int perMinute)
+        public bool AllowFind(int perMinute, int count) => Allow(_finds, perMinute, count);
+
+        public bool AllowStatus(int perMinute, int count) => Allow(_statusIds, perMinute, count);
+
+        /// <summary>Counts <paramref name="count"/> more in <paramref name="times"/> unless that makes more than <paramref name="perMinute"/> in a minute.</summary>
+        public static bool Allow(Queue<DateTimeOffset> times, int perMinute, int count)
         {
-            lock (_finds)
+            lock (times)
             {
                 var now = DateTimeOffset.UtcNow;
-                while (_finds.Count > 0 && now - _finds.Peek() > TimeSpan.FromMinutes(1)) _finds.Dequeue();
-                if (_finds.Count >= perMinute) return false;
-                _finds.Enqueue(now);
+                while (times.Count > 0 && now - times.Peek() > TimeSpan.FromMinutes(1)) times.Dequeue();
+                if (times.Count + count > perMinute) return false;
+                for (int i = 0; i < count; i++) times.Enqueue(now);
                 return true;
             }
         }

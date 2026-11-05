@@ -9,6 +9,8 @@ namespace Sheron.Core.Rendezvous;
 /// the other half (<see cref="PacketMux.Session"/>). A TCP relay path is joined to that same session. A relay the
 /// viewer asks for after this PC took a direct path is joined too (TRD › Direct handshake check). It also keeps the
 /// server's view of this PC's UDP address fresh. One viewer's path at a time.
+/// This PC can also view another on the same socket and registration (<see cref="ConnectAsync"/>; Plan step 15a): while
+/// <see cref="Viewing"/> is set, Incoming is ignored (TRD › Connect by ID › One session at a time).
 /// </summary>
 public sealed class HostRendezvous : IDisposable
 {
@@ -24,6 +26,7 @@ public sealed class HostRendezvous : IDisposable
     private TcpRelayTransport? _tcp;
     private Thread? _tcpPump;
     private volatile string? _accepting;
+    private volatile bool _viewing;
 
     public HostRendezvous(RendezvousClient client, PacketMux mux, IPEndPoint serverUdp, ConnectTimings? timings = null)
     {
@@ -45,6 +48,48 @@ public sealed class HostRendezvous : IDisposable
     /// <summary>No path to that viewer (it never sent a Hello, or the relay failed).</summary>
     public event Action<PeerInfo, Exception>? PathFailed;
 
+    /// <summary>
+    /// This PC is viewing another: Incoming is ignored, so no other path touches the socket. Set by the caller before
+    /// <see cref="ConnectAsync"/>; cleared when the session ends, which also sends the socket's packets back to this
+    /// PC's own session.
+    /// </summary>
+    public bool Viewing
+    {
+        get => _viewing;
+        set
+        {
+            _viewing = value;
+            if (!value) _mux.CloseViewer();
+        }
+    }
+
+    /// <summary>
+    /// This PC as viewer, after Found: the path to the other PC on the shared socket (direct, relay or TCP 443). A UDP
+    /// path comes with its own queue from <see cref="PacketMux.OpenViewer"/>. Set <see cref="Viewing"/> first.
+    /// </summary>
+    public Task<ConnectedPath> ConnectAsync(PeerInfo peer, CancellationToken cancel = default) =>
+        AsViewer(token => Connector.ConnectAsync(peer, token), cancel);
+
+    /// <summary>This PC as viewer: the relay without punching, after a direct path did not finish its handshake.</summary>
+    public Task<ConnectedPath> RelayAsync(PeerInfo peer, CancellationToken cancel = default) =>
+        AsViewer(token => Connector.RelayAsync(peer, token), cancel);
+
+    private async Task<ConnectedPath> AsViewer(Func<CancellationToken, Task<ConnectedPath>> find, CancellationToken cancel)
+    {
+        using var both = CancellationTokenSource.CreateLinkedTokenSource(cancel, _closing.Token);
+        await _oneAtATime.WaitAsync(both.Token).ConfigureAwait(false);
+        try
+        {
+            _mux.Rendezvous.Clear();
+            var path = await find(both.Token).ConfigureAwait(false);
+            return path.Transport == _mux.Rendezvous ? path with { Transport = _mux.OpenViewer(path.Remote) } : path;
+        }
+        finally
+        {
+            _oneAtATime.Release();
+        }
+    }
+
     public async Task<bool> CheckAddressAsync(CancellationToken cancel = default)
     {
         await _oneAtATime.WaitAsync(cancel).ConfigureAwait(false);
@@ -61,6 +106,7 @@ public sealed class HostRendezvous : IDisposable
 
     private void OnIncoming(PeerInfo caller)
     {
+        if (_viewing) return;
         _callers[Convert.ToHexString(caller.ConnectId)] = caller;
         _ = AcceptAsync(caller);
     }
@@ -69,6 +115,7 @@ public sealed class HostRendezvous : IDisposable
     private void OnRelayAsked(byte[] connectId)
     {
         string key = Convert.ToHexString(connectId);
+        if (_viewing) return;
         if (_accepting != key && _callers.TryGetValue(key, out var caller)) _ = JoinLateAsync(caller);
     }
 

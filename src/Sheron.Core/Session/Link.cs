@@ -21,6 +21,8 @@ public enum LinkState
     Connected,
     /// <summary>The viewer heard nothing for the timeout; the session is over.</summary>
     Lost,
+    /// <summary>Viewer: the session was ended on purpose, by either side (Disconnect).</summary>
+    Ended,
 }
 
 public sealed record LinkSnapshot(
@@ -212,6 +214,27 @@ public sealed class Link : IDisposable
     /// <summary>The jitter buffer holds a frame at most this long for an earlier missing one.</summary>
     public static readonly TimeSpan MaxHold = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>
+    /// Ends the session now (Disconnect on the toolbar or the banner; PRD A6) and tells the other side with Bye, three
+    /// times in separate packets; if all three are lost, the other side times out as usual. Raises
+    /// <see cref="Disconnected"/>. A remote PC then waits for the next viewer; a viewer is <see cref="LinkState.Ended"/>.
+    /// </summary>
+    public void Disconnect()
+    {
+        lock (_gate)
+        {
+            if (_state != LinkState.Connected || _session is null || _peer is null) return;
+            var now = _clock.Elapsed;
+            for (int i = 0; i < 3; i++)
+            {
+                _reliableOut.Send(ControlMessage.Bye());
+                FlushReliable(now);
+            }
+            EndSession(_isHost ? LinkState.Waiting : LinkState.Ended);
+        }
+        Disconnected?.Invoke();
+    }
+
     /// <summary>Sends a control message over the reliable channel. Dropped when not connected.</summary>
     public void SendControl(ReadOnlySpan<byte> message)
     {
@@ -351,7 +374,10 @@ public sealed class Link : IDisposable
                 if (!_reliableIn.OnPacket(plain, messages)) break;
                 Send(_session.Seal(_reliableIn.Ack()), from);
                 foreach (var message in messages)
+                {
                     if (!HandleInside(message, now, raise)) raise.Add(() => ControlReceived?.Invoke(message));
+                    if (_session is null) break;   // Bye ended it
+                }
                 break;
             case PacketKind.Ack:
                 _reliableOut.OnAck(plain, now);
@@ -386,6 +412,10 @@ public sealed class Link : IDisposable
         switch (ControlMessage.TypeOf(message))
         {
             case ControlType.Ping:
+                return true;
+            case ControlType.Bye:
+                EndSession(_isHost ? LinkState.Waiting : LinkState.Ended);
+                raise.Add(() => Disconnected?.Invoke());
                 return true;
             case ControlType.ClockProbe when _isHost && ControlMessage.TryReadClockProbe(message, out long viewerMicros):
                 _reliableOut.Send(ControlMessage.ClockReply(viewerMicros, Micros.Now()));

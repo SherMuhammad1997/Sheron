@@ -84,6 +84,38 @@ public class LinkTests
     }
 
     [Fact]
+    public void Disconnect_on_either_side_ends_the_session_at_once_on_both()
+    {
+        // A long timeout: only Bye can end the session this quickly.
+        var slow = new LinkTimings(TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(100), TimeSpan.FromSeconds(30));
+        using var hostKey = DeviceKey.Create();
+        using var viewerKey = DeviceKey.Create();
+        using var host = Link.Host(hostKey, port: 0, slow);
+        int hostEnded = 0, viewerEnded = 0;
+        host.Disconnected += () => Interlocked.Increment(ref hostEnded);
+
+        // The remote PC ends it (the banner's Disconnect).
+        using (var viewer = Link.Viewer(viewerKey, Local(host), slow))
+        {
+            viewer.Disconnected += () => Interlocked.Increment(ref viewerEnded);
+            Assert.True(Within(() => host.Snapshot().State == LinkState.Connected && viewer.Snapshot().State == LinkState.Connected));
+            host.Disconnect();
+            Assert.Equal(LinkState.Waiting, host.Snapshot().State);
+            Assert.True(Within(() => viewerEnded == 1 && viewer.Snapshot().State == LinkState.Ended, 1000), "the viewer did not hear Bye");
+            Assert.Equal(1, hostEnded);
+        }
+
+        // The viewer ends it (the toolbar's Disconnect); the remote PC waits for the next viewer.
+        using (var viewer = Link.Viewer(viewerKey, Local(host), slow))
+        {
+            Assert.True(Within(() => host.Snapshot().State == LinkState.Connected && viewer.Snapshot().State == LinkState.Connected));
+            viewer.Disconnect();
+            Assert.Equal(LinkState.Ended, viewer.Snapshot().State);
+            Assert.True(Within(() => hostEnded == 2 && host.Snapshot().State == LinkState.Waiting, 1000), "the remote PC did not hear Bye");
+        }
+    }
+
+    [Fact]
     public void When_the_remote_PC_goes_the_viewer_loses_the_session_and_the_reverse()
     {
         using var hostKey = DeviceKey.Create();

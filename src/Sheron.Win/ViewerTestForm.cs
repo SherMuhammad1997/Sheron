@@ -16,23 +16,23 @@ using Sheron.Win.View;
 namespace Sheron.Win;
 
 /// <summary>
-/// Developer window for Plan steps 8–9 and 16 on the viewer: connects to a remote PC on the same network by IP, sends
-/// the password, and once let in shows its screen and sends the mouse and keyboard used over the picture (TRD › Input
-/// path, Passwords and consent). It connects by the remote PC's ID through the Sheron server (Plan step 14, TRD ›
-/// Connect by ID) or by IP on the same network. Opened from the start window, where the password is typed.
+/// Developer window for Plan steps 8–9 and 16 on the viewer: connects to a remote PC, sends the password, and once let
+/// in shows its screen and sends the mouse and keyboard used over the picture (TRD › Input path, Passwords and
+/// consent). It connects by the remote PC's ID through the Sheron server (Plan step 14, TRD › Connect by ID) or by IP
+/// on the same network, on this PC's own socket and registration (<see cref="ThisPc"/>, Plan step 15a). Opened from
+/// the home window, where the password is typed. The session window of Plan step 15b replaces it.
 /// </summary>
 internal sealed class ViewerTestForm : DevForm
 {
     /// <summary>Frames held while the video format is not yet known (TRD › Connect by IP).</summary>
     private const int MaxEarlyFrames = 60;
 
+    private readonly ThisPc _pc;
     private readonly IPEndPoint? _remote;
     private readonly uint? _id;
     private readonly string _password;
-    // Connect by ID: this window's own socket and server link, and the path found.
+    // The path found on this PC's socket.
     private readonly CancellationTokenSource _closing = new();
-    private UdpTransport? _udp;
-    private RendezvousClient? _client;
     private TcpRelayTransport? _tcp;
     private PathKind? _path;
     private volatile string? _stage;
@@ -41,6 +41,7 @@ internal sealed class ViewerTestForm : DevForm
     private DeviceKey? _key;
     private string? _keyError;
     private ViewerAccess? _access;
+    private bool _toldLetIn;
     private long _answeredAt;
     private volatile bool _timedFromCapture;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -64,24 +65,29 @@ internal sealed class ViewerTestForm : DevForm
     private RemoteCursor? _cursor;
 
     /// <summary>Connect by IP on the same network (Plan step 8).</summary>
-    public ViewerTestForm(IPEndPoint remote, string password, bool allowHardwareDecoder = true)
+    public ViewerTestForm(ThisPc pc, IPEndPoint remote, string password, bool allowHardwareDecoder = true)
         : base($"viewing {remote} (developer)", $"Viewing {remote} · by IP · click the picture to control",
             new Size(1040, 768), headerHeight: 252, rowsPerColumn: 7, withVideo: true)
     {
+        _pc = pc;
         _remote = remote;
         _password = password;
         _allowHardwareDecoder = allowHardwareDecoder;
     }
 
     /// <summary>Connect by ID through the Sheron server (Plan step 14).</summary>
-    public ViewerTestForm(uint id, string password, bool allowHardwareDecoder = true)
+    public ViewerTestForm(ThisPc pc, uint id, string password, bool allowHardwareDecoder = true)
         : base($"viewing {RendezvousWire.Show(id)} (developer)", $"Viewing {RendezvousWire.Show(id)} · by ID · click the picture to control",
             new Size(1040, 768), headerHeight: 252, rowsPerColumn: 7, withVideo: true)
     {
+        _pc = pc;
         _id = id;
         _password = password;
         _allowHardwareDecoder = allowHardwareDecoder;
     }
+
+    /// <summary>The remote PC let this viewer in, with the name it gave (on the UI thread, once).</summary>
+    public event Action<string?>? LetIn;
 
     protected override void OnShown(EventArgs e)
     {
@@ -89,58 +95,44 @@ internal sealed class ViewerTestForm : DevForm
         var video = Video!;
         _viewer = new VideoViewer(video.Handle, video.ClientSize.Width, video.ClientSize.Height, _allowHardwareDecoder);
         video.SizeChanged += (_, _) => _viewer.Resize(video.ClientSize.Width, video.ClientSize.Height);
-        try
+        // This PC's key and socket belong to the home window's ThisPc.
+        _key = _pc.Key;
+        if (_key is null)
         {
-            _key = DeviceKey.Import(SecretStore.ThisPc().DevicePrivateKey);
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or CryptographicException)
-        {
-            _keyError = $"Cannot read this PC's Sheron secrets: {error.Message}";
+            _keyError = _pc.Problem ?? "This PC's Sheron is not running";
             StartRefresh();
             return;
         }
         StartRefresh();
         WireControl(video);
-        if (_remote is not null) StartSession(Link.Viewer(_key, _remote), expectedHostKey: null);
+        if (_remote is not null) StartSession(Link.Viewer(_key, _pc.OpenViewer(_remote), _remote), expectedHostKey: null);
         else _ = ConnectById(_key, _id!.Value);
     }
 
     /// <summary>
-    /// Registers this PC, finds the ID, and works out the path: direct, relay or TCP 443 (TRD › Connect by ID).
-    /// On the UI thread between awaits.
+    /// Finds the ID through this PC's registration and works out the path on its socket: direct, relay or TCP 443
+    /// (TRD › Connect by ID). On the UI thread between awaits.
     /// </summary>
     private async Task ConnectById(DeviceKey key, uint id)
     {
         try
         {
-            _stage = $"Connecting to the Sheron server {ServerConfig.Host} …";
-            _udp = new UdpTransport();
-            var lan = LocalNetwork.IPv4Addresses()
-                .Select(ip => new PeerAddress(AddressKind.Lan, new IPEndPoint(ip, _udp.LocalEndPoint.Port))).ToList();
-            _client = await RendezvousClient.ConnectAsync(ServerConfig.Host, ServerConfig.Port, ServerConfig.Pin, key, lan, _closing.Token);
-            if (_client.Id == id)
-            {
-                Stop("That is this PC's own ID: type the ID the other PC's sharing window shows");
-                return;
-            }
-            var connector = new Connector(_client, _udp, ServerConfig.UdpEndPoint);
-            await connector.CheckAddressAsync(_closing.Token);
-
             _stage = $"Finding {RendezvousWire.Show(id)} …";
-            var found = await _client.FindAsync(id, _closing.Token);
+            var found = await _pc.FindAsync(id, _closing.Token);
             if (found.Peer is not { } peer)
             {
                 Stop(found.Reason switch
                 {
-                    NotFoundReason.Offline => "That PC is not online: its sharing window is closed, or it has no internet",
+                    NotFoundReason.Offline => "That PC is not online: its Sheron is closed, or it has no internet",
                     NotFoundReason.TooManyTries => "Too many tries: wait a minute, then try again",
-                    _ => "No PC has that ID: check the number",
+                    NotFoundReason.Busy => "That PC is in another session: try again when it is free",
+                    _ => "No PC has that ID: check the ID",
                 });
                 return;
             }
 
             _stage = "Finding the fastest path (direct first, then the relay) …";
-            var path = await connector.ConnectAsync(peer, _closing.Token);
+            var path = await _pc.ConnectAsync(peer, _closing.Token);
             // The window may have closed meanwhile; its socket is gone then.
             if (_closing.IsCancellationRequested)
             {
@@ -165,7 +157,7 @@ internal sealed class ViewerTestForm : DevForm
             _link?.Dispose();
             _access = null;
             _link = null;
-            path = await connector.RelayAsync(peer, _closing.Token);
+            path = await _pc.RelayAsync(peer, _closing.Token);
             if (_closing.IsCancellationRequested)
             {
                 (path.Transport as TcpRelayTransport)?.Dispose();
@@ -176,17 +168,13 @@ internal sealed class ViewerTestForm : DevForm
             _stage = null;
             StartSession(Link.Viewer(key, path.Transport, path.Remote), peer.PublicKey);
         }
-        catch (AuthenticationException)
-        {
-            Stop("The server's pin does not match: this is not our server");
-        }
         catch (TimeoutException)
         {
             Stop("No path to that PC: it did not answer directly or through the relay");
         }
         catch (Exception error) when (error is SocketException or IOException or InvalidDataException)
         {
-            Stop($"Cannot reach the Sheron server: {error.Message}");
+            Stop($"Cannot reach the other PC through the Sheron server: {error.Message}");
         }
         catch (Exception error) when (error is OperationCanceledException or ObjectDisposedException)
         {
@@ -204,8 +192,18 @@ internal sealed class ViewerTestForm : DevForm
     private void StartSession(Link link, byte[]? expectedHostKey)
     {
         _link = link;
-        _access = new ViewerAccess(link, _password, expectedHostKey);
-        _access.Answered += _ => Interlocked.Exchange(ref _answeredAt, Stopwatch.GetTimestamp());
+        _access = new ViewerAccess(link, _password, expectedHostKey, _pc.Name);
+        _access.Answered += answer =>
+        {
+            Interlocked.Exchange(ref _answeredAt, Stopwatch.GetTimestamp());
+            if (answer.Result != AccessResult.LetIn) return;
+            OnUiThread(() =>
+            {
+                if (_toldLetIn) return;
+                _toldLetIn = true;
+                LetIn?.Invoke(answer.Name);
+            });
+        };
         _access.HostKeyMismatch += () => OnUiThread(() =>
         {
             Stop("Stopped: the remote PC's key is not the one the server gave for that ID. The password was not sent");
@@ -398,7 +396,7 @@ internal sealed class ViewerTestForm : DevForm
         {
             yield return ("Status", _stage ?? "Starting", _stageBad ? Bad : null);
             yield return ("Remote PC", remote, null);
-            yield return ("This PC's ID", _client is { Id: not 0 } c ? RendezvousWire.Show(c.Id) : "–", null);
+            yield return ("This PC's ID", _pc.Id is { } own ? RendezvousWire.Show(own) : "–", null);
             yield return ("This PC's key", _key is null ? "–" : KeyFingerprint.Show(_key.Fingerprint), null);
             yield break;
         }
@@ -408,6 +406,8 @@ internal sealed class ViewerTestForm : DevForm
         {
             LinkState.Connecting => ($"Connecting to {remote} …", null),
             LinkState.Lost => ("Connection lost (nothing heard for 5 s)", Bad),
+            // Ended after an answer that was not Let in (busy, denied): that answer says why.
+            LinkState.Ended => (_access?.Answer is { Result: not AccessResult.LetIn } ? AccessStatus() : null) ?? ("The remote PC ended the session", Bad),
             _ => AccessStatus() ?? (v.Status, (Color?)null),
         };
         yield return ("Status", status, color);
@@ -453,6 +453,7 @@ internal sealed class ViewerTestForm : DevForm
             AccessResult.Denied => ("The person at the remote PC said no", Bad),
             AccessResult.TooManyRequests => ($"That PC said no 3 times: it takes no requests from this PC for {Math.Max(1, Math.Ceiling(answer.Seconds / 60.0))} min", Bad),
             AccessResult.NoAnswer => ("Nobody at the remote PC answered in 30 s", Bad),
+            AccessResult.Busy => ("That PC is in another session", Bad),
             _ => null,
         };
     }
@@ -461,16 +462,15 @@ internal sealed class ViewerTestForm : DevForm
     {
         if (disposing)
         {
-            // Let go of anything held, then the link: it hands frames to the viewer.
+            // Let go of anything held, end the session at once (Bye), then the link: it hands frames to the viewer.
+            // The key and socket stay: they are this PC's (ThisPc).
             Send(InputMessage.ReleaseAll());
             _closing.Cancel();
+            _link?.Disconnect();
             _access?.Dispose();
             _link?.Dispose();
             _tcp?.Dispose();
-            _udp?.Dispose();
-            _client?.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(2));
             _viewer?.Dispose();
-            _key?.Dispose();
             if (Video is { } video) video.Cursor = Cursors.Default;
             _cursor?.Dispose();
         }

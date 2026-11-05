@@ -221,6 +221,7 @@ Before the server exists (Plan steps 11–14), two PCs on the same network conne
 | Key | 8 | Scan code (2 bytes), extended (1) or not (0), down (1) or up (0) |
 | Release all | 9 | Nothing: the remote PC lets go of every key and button the viewer holds |
 | Keyframe request | 10 | Nothing: the remote PC encodes its next frame as a keyframe (IDR), at once even if its screen is still |
+| Bye (Plan step 15a) | 16 | Nothing: this side ended the session (Disconnect on the banner or toolbar, or the viewer window closed). Sent three times in separate packets; the other side ends the session at once (a remote PC waits for the next viewer, a viewer shows the session ended). If all three are lost, the 5 s timeout ends it |
 
 **After a lost frame** (added 1 Nov, Plan step 9 test: on the iPhone hotspot, lost frames left smeared, broken pictures, which on a still screen stayed for minutes): the viewer sees a gap in the frame numbers, stops decoding, keeps showing the last clean picture, and sends a keyframe request; again every one and a half round trips (at least 300 ms; Plan step 10, so a slow link does not get a second keyframe while the first is on its way) until a keyframe arrives. The remote PC asks its encoder for an IDR (oneVPL: `mfxEncodeCtrl.FrameType` = I + reference + IDR; Media Foundation: `CODECAPI_AVEncVideoForceKeyFrame`) and, if its screen is still, encodes the last captured image again so the keyframe goes out within about 100 ms. This is the "new keyframe only when the viewer asks after loss" of the video path, brought forward from Plan step 10.
 
@@ -276,9 +277,9 @@ After the session handshake the remote PC sends nothing and takes no input until
 
 | Step | What happens |
 | --- | --- |
-| 1 | The viewer sends Access request: empty, or with the fixed password typed for unattended access |
+| 1 | The viewer sends Access request: empty, or with the fixed password typed for unattended access, and this PC's name. While the remote PC is in another session it answers Busy at once |
 | 2 | Refused 3 times within 10 minutes: answer Too many requests with the seconds left, nobody asked. Locked: answer Locked with the seconds left; the password is not checked and does not count |
-| 3 | No password: the person at the remote PC is asked (incoming request: viewer's ID or address and key, Accept, Deny). Answer Asking with 30 s. Accept: Let in. Deny: Denied. No answer within 30 s: No answer. Deny and no answer count as refused for step 2 |
+| 3 | No password: the person at the remote PC is asked (incoming request: the viewer's name, its ID or address, Accept, Deny). Answer Asking with 30 s. Accept: Let in. Deny: Denied. No answer within 30 s: No answer. Deny and no answer count as refused for step 2 |
 | 4 | It is the fixed password: Let in at once, with nobody asked (unattended access) |
 | 5 | A password that is not the fixed one: Wrong, with the tries left; the third in a row also starts the 30 s lock. The viewer may try again in the same session |
 | After | Let in: the remote PC starts capture and takes input |
@@ -289,8 +290,8 @@ Plan step 16b check, 5 Nov on Sher's laptops (both on the iPhone hotspot): the u
 
 | Control message | Byte 0 | Then |
 | --- | --- | --- |
-| Access request (viewer → remote PC) | 11 | Length (1 byte), the password in UTF-8 (0–255 bytes; 0: no password, ask the person) |
-| Access answer (remote PC → viewer) | 12 | Result (1 byte: 1 let in, 2 asking the person, 3 wrong password, 4 locked, 5 denied, 6 no answer, 7 too many requests), tries left (1 byte), seconds (2 bytes: time left to answer, or lock time left) |
+| Access request (viewer → remote PC) | 11 | Length (1 byte), the password in UTF-8 (0–255 bytes; 0: no password, ask the person); then length (1) and the viewer's PC name in UTF-8 (0–64 bytes; Plan step 15a, may be missing: no name) |
+| Access answer (remote PC → viewer) | 12 | Result (1 byte: 1 let in, 2 asking the person, 3 wrong password, 4 locked, 5 denied, 6 no answer, 7 too many requests, 8 in another session), tries left (1 byte), seconds (2 bytes: time left to answer, or lock time left); then length (1) and the remote PC's name (0–64 bytes; empty unless Let in). A 5-byte answer (before Plan step 15a) is read as one without a name |
 
 **Secrets file** `%ProgramData%\Sheron\secrets.bin`: DPAPI, machine scope (so the service of Plan step 17 can read it), with "Sheron 1 secrets" as extra entropy. Inside: version (1 byte, 1); the device private key (2-byte length, PKCS#8); the fixed password (1 byte: 0 none, 1 set; then rounds (4 bytes), salt (16), hash (32)). Machine-scope DPAPI lets any program on the PC open it, so the file itself is only for SYSTEM, Administrators and the Windows user who made it (nothing inherited from the folder). It is written to a new file, then moved over the old one. A file that cannot be opened (for example copied from another PC) is kept as `secrets.bin.unreadable` and new secrets are made: a new device key, so a new ID.
 
@@ -347,7 +348,13 @@ Measured 26 Oct in the cloud session (Release build): sealing a 1,168-byte packe
 | Video | The session window draws video with Direct3D 11 in one child window |
 | DPI | Per-monitor DPI aware (PerMonitorV2), so capture, pointer and input all use real screen pixels |
 | Style | Control Room (PRD decision #1): background #0E141B, panels #151E28, lines #243142, text #E6EDF3, muted #9FB0C3, accent amber #F2A93B, green #3FB871, red #E5534B. IBM Plex Sans / Mono, bundled |
-| Screens | Home, session window, incoming request, banner, settings — see `docs/design/` |
+| Screens | Home, session window, incoming request, banner, settings — see `docs/design/`. Built in Plan steps 15a (home, request, banner), 15b (session window) and 15c (settings) |
+| Fonts | IBM Plex Sans (Regular, Medium, SemiBold, Bold) and Mono (Regular, Medium, SemiBold) TTF files from `third_party/ibm-plex`, built into the app and loaded at start for this process only (nothing installed on the PC). Sizes follow the boards in pixels at 96 DPI, scaled to the screen |
+| Logo | Idea 10, "Wordmark" (PRD decision 1 Nov): "sher", the o drawn as a small screen in amber, then "n"; drawn in code |
+| Home | Layout 3 (PRD decision 1 Nov): a header (wordmark, this PC's state); the address bar (partner ID or IP, password for unattended access, Connect); THIS PC (ID in Plex Mono, copy, state) on the left; RECENT on the right (up to 10: dot, name, ID; a click connects). The ID and password boxes are the only native controls. Closing the home ends sharing too |
+| Incoming request | A small window on top of everything, in the middle of the screen: "<name> wants to control this PC", the viewer's ID (or address), Accept and Deny, and "Denies by itself in N s" |
+| Banner | While a viewer is let in, a pill at the top centre of the screen, always on top and not in the taskbar: "Controlled by <name>", the session time, Disconnect. It cannot be closed or hidden; Disconnect ends the session at once (PRD F6, A6) |
+| PC name | The Windows computer name until the settings screen (Plan step 15c) lets the person change it; at most 32 characters |
 
 ## Third-party components (only these are approved)
 
@@ -357,7 +364,7 @@ Measured 26 Oct in the cloud session (Release build): sealing a 1,168-byte packe
 | Intel oneVPL dispatcher (libvpl) | MIT | Intel hardware encoder route (Plan step 4b, approved 25 Oct). The encoder itself (the GPU runtime) comes with the Intel graphics driver; nothing of Intel's is copied into our code |
 | Serilog, Serilog.Sinks.File | Apache-2.0 | Logs |
 | xUnit, xunit.runner.visualstudio, Microsoft.NET.Test.Sdk | Apache-2.0 / MIT | Tests |
-| IBM Plex Sans / Mono fonts | SIL OFL 1.1 | Bundled fonts |
+| IBM Plex Sans / Mono fonts | SIL OFL 1.1 | Bundled fonts: Sans 3.005, Mono 2.005, unchanged TTF files from IBM's repository (`third_party/ibm-plex/README.md`) |
 
 Everything else uses .NET 8 built-ins (`SslStream`, `AesGcm`, `ECDiffieHellman`, `ECDsa`, `HKDF`, `Rfc2898DeriveBytes`) and Windows APIs.
 
@@ -370,7 +377,7 @@ Everything else uses .NET 8 built-ins (`SslStream`, `AesGcm`, `ECDiffieHellman`,
 | Logs | `%ProgramData%\Sheron\logs\`, one file a day, kept 14 days (Serilog) |
 | Settings | `%ProgramData%\Sheron\settings.json` (no secrets) |
 | Secrets | `%ProgramData%\Sheron\secrets.bin` (DPAPI): device private key, fixed-password hash |
-| Recent list | `%AppData%\Sheron\recent.json` (per Windows user) |
+| Recent list | `%AppData%\Sheron\recent.json` (per Windows user): up to 10 PCs, newest first, each with its ID or IP address, its name as last seen, and when it was last connected. Written to a new file, then moved over the old one; a file that cannot be read starts an empty list |
 | Known keys | `%AppData%\Sheron\known-keys.json`: remote ID → device key fingerprint (key pinning; public data, no secrets) |
 | Server | `/opt/sheron-server`, systemd unit `sheron-server`, logs to journald; data folder `/opt/sheron-server/data` (`--data`) with `server-certificate.pfx` (the TLS key, readable by the server's user only) and `registry.txt`. Install files in the repository's `deploy/` folder |
 
@@ -410,9 +417,10 @@ Sheron's own protocol between each PC and the server. The server only introduces
 | IDs | 4 characters from 33: digits 0–9 and capital letters except I, L and O (PRD decision 4 Nov). The server gives 4-digit IDs (0000–9999) at random while any are free, then IDs with letters; never reused. Typed in either case, with spaces or dashes ignored; O is read as 0 and I or L as 1. On the wire an ID is 4 bytes: 1 + its value in base 33, so 0 never names a PC. IDs of the 9-digit form (before 4 Nov) are dropped from the registry, and those PCs get new IDs |
 | Registry | One text file, one line per device: ID, public key (hex), last seen (Unix seconds). Rewritten whole on a new device (written to a new file, then moved over the old one) and every 5 minutes |
 | Addresses | Each PC sends its LAN addresses with the UDP port of its link socket; the server adds the public UDP address its address check saw (Plan step 12; none while UDP is blocked) |
-| Finding a PC | Find (an ID): if that PC is online, the server makes a 16-byte connect ID and sends Found to the asker and Incoming to the target, each with the other's ID, device public key and addresses. The viewer then checks the handshake's host key against the key the server gave for that ID. Otherwise NotFound: unknown ID, or offline |
+| Finding a PC | Find (an ID): if that PC is online, the server makes a 16-byte connect ID and sends Found to the asker and Incoming to the target, each with the other's ID, device public key and addresses. The viewer then checks the handshake's host key against the key the server gave for that ID. Otherwise NotFound: unknown ID, offline, or in another session (the PC said Busy) |
 | Staying online | The PC sends Ping every 25 s; the server answers Pong and drops a connection silent for 60 s. One connection per device: a new one replaces the old |
-| Limits | At most 20 Find a minute per connection and 30 new connections a minute per IP address; more are refused |
+| Busy and status | A PC says Busy (1) when its session starts and Busy (0) when it ends; a new connection starts not busy. Status (up to 10 IDs) is answered with each ID's state: offline (also for an unknown ID), online, or in a session |
+| Limits | At most 20 Find a minute per connection and per IP address, 30 Status IDs a minute per connection and 60 per IP address, and 30 new connections a minute per IP address; more are refused (a Status over its limit is answered "not checked" for every ID) |
 
 | Type | Byte | Direction | Body |
 | --- | --- | --- | --- |
@@ -420,11 +428,14 @@ Sheron's own protocol between each PC and the server. The server only introduces
 | Registered | 2 | server → PC | ID (4 bytes), UDP token (16, Plan step 12) |
 | Found | 3 | server → viewer | Connect ID (16), ID (4), device public key (64), addresses |
 | Incoming | 4 | server → target | Connect ID (16), viewer's ID (4), viewer's device public key (64), addresses |
-| NotFound | 5 | server → viewer | ID (4), reason (1 byte: 1 unknown, 2 offline, 3 too many tries) |
+| NotFound | 5 | server → viewer | ID (4), reason (1 byte: 1 unknown, 2 offline, 3 too many tries, 4 in another session) |
 | Pong | 6 | server → PC | Nothing |
 | Register | 10 | PC → server | Device public key (64), signature (64), addresses |
 | Find | 11 | PC → server | ID (4) |
 | Ping | 12 | PC → server | Nothing |
+| Busy | 16 | PC → server | 1 byte: 1 in a session, 0 free (Plan step 15a) |
+| Status | 17 | PC → server | Count (1 byte, 1–10), then that many IDs (4 each) |
+| Status answer | 18 | server → PC | Count (1), then per ID: the ID (4) and its state (1 byte: 0 not checked, 1 offline, 2 online, 3 in a session) |
 
 Addresses: a count (1 byte), then per address its kind (1 byte: 1 LAN, 2 public as the server sees it), family (1 byte: 4 or 6), the address (4 or 16 bytes) and the UDP port (2 bytes).
 
@@ -471,15 +482,20 @@ Plan step 12 check: through the simulator, two PCs at different sites connect di
 | Item | Rule |
 | --- | --- |
 | Server | The app is built with the server's address and pin (TRD › Deployment: 168.138.174.180, TCP and UDP 443). The settings screen (Plan step 15) can change the address |
-| Remote PC | The sharing window opens its UDP socket (47920), registers with the server (this PC's ID shows), runs the address check, and keeps the server's view of its UDP address fresh with an address check every 25 s. A lost server link is tried again every 10 s. Connect by IP keeps working on the same socket |
+| Remote PC | The home window (Plan step 15a; before it, the sharing window) opens its UDP socket (47920), registers with the server (this PC's ID shows), runs the address check, and keeps the server's view of its UDP address fresh with an address check every 25 s. A lost server link is tried again every 10 s. Connect by IP keeps working on the same socket |
 | One socket, two readers | On the remote PC one thread reads the socket and hands each packet on by its first byte: rendezvous messages (0x30–0x35) to the connector, everything else to the session. While the connector is finding a path it also gets a copy of each Hello, to tell direct from relay. The session (Plan step 8 link) runs all the time, so a Hello on any path finds it. Only one viewer's path is worked out at a time |
 | TCP relay on the remote PC | When its UDP is blocked, the TCP relay is joined to the same session: packets from the relay come in beside the UDP ones, and packets to the relay's address go out over TLS. The relay's address is the server's IP with port 0, so it never mixes with the server's UDP address |
-| Viewer | "View a PC" with an ID: the viewer window opens its own UDP socket, registers, runs the address check, finds the ID, works out the path (direct, relay, TCP 443), then starts the session on it. Unknown ID, offline, or too many tries are shown as such |
+| Viewer | Connect with an ID (Plan step 15a): on the home window's registration and socket, find the ID, work out the path (direct, relay, TCP 443), then start the session on it. Unknown ID, offline, in another session, or too many tries are shown as such |
 | Remote PC's key | The server gives the remote PC's device key with Found. The viewer checks the session handshake's key against it before sending the password; a different key stops the session with a warning, and the password is never sent |
-| Path shown | Both windows show the path: Direct (with the address), Relay through the server, or TCP 443 relay. This is what PRD A2 and the step 14 check look at; the toolbar of Plan step 15 shows it the same way |
-| One registration per PC | A PC registers once; a second window registering the same PC replaces the first. So the sharing window and a viewer window are not open together on one PC |
+| Path shown | Both windows show the path: Direct (with the address), Relay through the server, or TCP 443 relay. This is what PRD A2 and the step 14 check look at; the toolbar of Plan step 15b shows it the same way |
+| Recent online | The home asks the server about the Recent IDs when it opens, when a session ends, and every 60 s while it shows (not minimised): online, in a session, or offline. Up to 10 IDs a time |
+| One registration per PC | A PC registers once; a second connection with the same key replaces the first. From Plan step 15a one app window holds this PC's socket (47920) and registration for both roles: it shares this PC and connects to others. A second copy of the app on the same PC is not started |
+| One session at a time | A PC is in at most one session, as viewer or as remote PC (PRD decision 5 Nov). While in one, it tells the server Busy, and a Find for it is answered NotFound "in another session" with nothing sent to it; an Incoming that still arrives (sent just before) is ignored, and an Access request on the session socket (connect by IP) is answered Busy. The home's Connect is off while this PC is controlled. One socket can only carry one session: the server relays by the address packets come from |
+| Viewer on the shared socket | While this PC views another, packets from the other PC's address (or the relay's, on a relayed path) go to the viewer's session; every other packet goes to this PC's own session as before, and rendezvous messages to the connector. Paths are worked out one at a time on the socket, whichever role |
 
 Plan step 14 check: Sher's laptop on the iPhone hotspot connects by ID to a second PC on another network; both windows show Direct or Relay.
+
+Plan step 15a check: simulator tests where a PC that is sharing its screen views another by ID on its own socket (direct, and through the relay), is viewed again afterwards, and is found "in another session" while it views; on Sher's laptops each home window shows its ID, Connect by ID asks the other PC (incoming request with this PC's name), the banner shows for the whole session and its Disconnect ends it at once, and the Recent list shows the other PC online.
 
 Part done 4 Nov: by ID with both laptops on the iPhone hotspot, the second laptop found 713 152 388 through the server, the key matched, the viewer was let in and saw the picture (1920 × 1200, hardware decoding); path Direct across the hotspot (172.20.10.4), 7.6 ms round trip. Still to do: the two laptops on different networks.
 

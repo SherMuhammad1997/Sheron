@@ -29,6 +29,8 @@ public sealed class RendezvousClient : IAsyncDisposable
     private readonly ConcurrentDictionary<uint, TaskCompletionSource<FindResult>> _finding = new();
     private readonly ConcurrentDictionary<string, TaskCompletionSource> _joiningTcp = new();
     private readonly TimeSpan _pingEvery;
+    private readonly SemaphoreSlim _askingStatus = new(1, 1);
+    private volatile StatusQuestion? _status;
     private Task? _reading;
     private Task? _pinging;
     private int _closed;
@@ -41,7 +43,7 @@ public sealed class RendezvousClient : IAsyncDisposable
         _pingEvery = pingEvery;
     }
 
-    /// <summary>This PC's 9-digit ID, tied to its device key.</summary>
+    /// <summary>This PC's 4-character ID, tied to its device key.</summary>
     public uint Id { get; private set; }
 
     /// <summary>The token this PC's UDP address check carries, from Registered.</summary>
@@ -129,6 +131,34 @@ public sealed class RendezvousClient : IAsyncDisposable
             return await answer.Task.ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Tells the server this PC is in a session (or free again): while busy, nobody is introduced to it and others see
+    /// it as in a session (TRD › Connect by ID › One session at a time). A new link starts free.
+    /// </summary>
+    public Task SetBusyAsync(bool busy, CancellationToken cancel = default) =>
+        SendAsync(RendezvousType.Busy, (byte[])[busy ? (byte)1 : (byte)0], cancel);
+
+    /// <summary>Which of these PCs (1–10 IDs) are online, offline or in a session: for the Recent list. One question at a time.</summary>
+    public async Task<IReadOnlyList<(uint Id, PcState State)>> StatusAsync(IReadOnlyList<uint> ids, CancellationToken cancel = default)
+    {
+        var body = RendezvousWire.Status(ids);
+        await _askingStatus.WaitAsync(cancel).ConfigureAwait(false);
+        try
+        {
+            var question = new StatusQuestion([.. ids]);
+            _status = question;
+            if (!IsConnected) throw new IOException("The link to the server closed.");
+            await SendAsync(RendezvousType.Status, body, cancel).ConfigureAwait(false);
+            using (cancel.Register(() => question.Answer.TrySetCanceled(cancel)))
+                return await question.Answer.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            _status = null;
+            _askingStatus.Release();
+        }
+    }
+
     /// <summary>Viewer: no direct path to the PC of this connect ID; the server asks that PC to join the relay.</summary>
     public Task RequestRelayAsync(byte[] connectId, CancellationToken cancel = default) =>
         SendAsync(RendezvousType.RelayRequest, connectId, cancel);
@@ -185,6 +215,10 @@ public sealed class RendezvousClient : IAsyncDisposable
                         Incoming?.Invoke(caller!);
                         break;
                     case RendezvousType.Pong:
+                        break;
+                    case RendezvousType.StatusAnswer when RendezvousWire.TryReadStatusAnswer(message.Body, out var states):
+                        // A late answer to a question given up on is not this question's.
+                        if (_status is { } question && states.Select(s => s.Id).SequenceEqual(question.Ids)) question.Answer.TrySetResult(states);
                         break;
                     case RendezvousType.RelayAsked when message.Body.Length == RendezvousWire.ConnectIdSize:
                         RelayAsked?.Invoke(message.Body);
@@ -244,9 +278,15 @@ public sealed class RendezvousClient : IAsyncDisposable
         _closing.Cancel();
         foreach (var waiting in _finding.Values) waiting.TrySetException(new IOException("The link to the server closed."));
         foreach (var waiting in _joiningTcp.Values) waiting.TrySetException(new IOException("The link to the server closed."));
+        _status?.Answer.TrySetException(new IOException("The link to the server closed."));
         _tls.Dispose();
         _tcp.Dispose();
         Disconnected?.Invoke();
+    }
+
+    private sealed record StatusQuestion(List<uint> Ids)
+    {
+        public TaskCompletionSource<List<(uint Id, PcState State)>> Answer { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     public async ValueTask DisposeAsync()
@@ -255,6 +295,7 @@ public sealed class RendezvousClient : IAsyncDisposable
         if (_reading is not null) await _reading.ConfigureAwait(false);
         if (_pinging is not null) await _pinging.ConfigureAwait(false);
         _writing.Dispose();
+        _askingStatus.Dispose();
         _closing.Dispose();
     }
 }

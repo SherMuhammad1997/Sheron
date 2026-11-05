@@ -242,6 +242,105 @@ public class ConnectByIdTests : IAsyncLifetime
         Assert.Equal(PathKind.Relay, (await ViewById(host, home, "192.168.1.21")).Viewer);
     }
 
+    /// <summary>
+    /// The home window's case (Plan step 15a): <paramref name="from"/>, already sharing its own screen, views
+    /// <paramref name="to"/> by ID on its own socket and registration, as busy (TRD › Connect by ID › One session at a
+    /// time). Returns the viewer's path; the session stays open until the test ends, or until <paramref name="end"/>.
+    /// </summary>
+    private async Task<PathKind> ViewFromHome(Host from, Host to, Action<Action>? end = null)
+    {
+        from.Rendezvous.Viewing = true;
+        from.Access.Busy = true;
+        await from.Client.SetBusyAsync(true);
+        var peer = Assert.IsType<PeerInfo>((await from.Client.FindAsync(to.Client.Id)).Peer);
+        var path = await from.Rendezvous.ConnectAsync(peer);
+        if (path.Transport is TcpRelayTransport tcp) Own(tcp);
+        var link = Own(Link.Viewer(from.Key, path.Transport, path.Remote, Quick));
+        var access = Own(new ViewerAccess(link, Unattended, peer.PublicKey, "Home PC"));
+        if (path.Kind == PathKind.Direct && !Within(() => link.Snapshot().State == LinkState.Connected,
+                (int)ConnectTimings.Default.HandshakeWait.TotalMilliseconds))
+        {
+            access.Dispose();
+            link.Dispose();
+            path = await from.Rendezvous.RelayAsync(peer);
+            if (path.Transport is TcpRelayTransport relay) Own(relay);
+            link = Own(Link.Viewer(from.Key, path.Transport, path.Remote, Quick));
+            access = Own(new ViewerAccess(link, Unattended, peer.PublicKey, "Home PC"));
+        }
+        var frames = new ConcurrentQueue<AssembledFrame>();
+        link.FrameReceived += frames.Enqueue;
+
+        Assert.True(Within(() => access.IsLetIn && to.Access.IsLetIn), $"not let in: {access.Answer}");
+        Assert.Equal("Home PC", to.Access.ViewerName);
+        var sent = new List<byte[]>();
+        var random = new Random(15);
+        for (int i = 0; i < 10; i++)
+        {
+            var frame = new byte[i == 0 ? 60_000 : random.Next(2_000, 12_000)];
+            random.NextBytes(frame);
+            sent.Add(frame);
+            to.Link.SendFrame(frame, keyFrame: i == 0);
+            Thread.Sleep(5);
+        }
+        Assert.True(Within(() => frames.Count == sent.Count), $"{frames.Count} of {sent.Count} frames");
+        Assert.Equal(sent, frames.Select(f => f.Data));
+        // The home's own session saw none of it.
+        Assert.Equal(LinkState.Waiting, from.Link.Snapshot().State);
+
+        end?.Invoke(() =>
+        {
+            access.Dispose();
+            link.Dispose();
+            from.Rendezvous.Viewing = false;
+            from.Access.Busy = false;
+            from.Client.SetBusyAsync(false).Wait();
+        });
+        return path.Kind;
+    }
+
+    [Fact]
+    public async Task A_PC_that_shares_its_screen_views_another_by_ID_on_its_own_socket_and_is_viewed_again_after()
+    {
+        var (home, office) = Sites();
+        var shop = _net.AddSite("shop", IPAddress.Parse("192.0.2.9"));
+        var homePc = await StartHost(home, "192.168.1.20");
+        var officePc = await StartHost(office, "10.0.0.8");
+
+        Action? endViewing = null;
+        Assert.Equal(PathKind.Direct, await ViewFromHome(homePc, officePc, end => endViewing = end));
+        endViewing!();
+
+        // Sharing again once the session is over: a viewer at a third place gets in.
+        Assert.Equal(PathKind.Direct, (await ViewById(homePc, shop, "172.16.0.5")).Viewer);
+    }
+
+    [Fact]
+    public async Task A_sharing_PC_views_another_through_the_relay_when_the_direct_path_is_blocked()
+    {
+        var (home, office) = Sites();
+        _net.Block(home, office);
+        var homePc = await StartHost(home, "192.168.1.20");
+        var officePc = await StartHost(office, "10.0.0.8");
+
+        Assert.Equal(PathKind.Relay, await ViewFromHome(homePc, officePc));
+    }
+
+    [Fact]
+    public async Task While_a_PC_views_another_a_third_PC_finds_it_in_another_session()
+    {
+        var (home, office) = Sites();
+        var homePc = await StartHost(home, "192.168.1.20");
+        var officePc = await StartHost(office, "10.0.0.8");
+        await ViewFromHome(homePc, officePc);
+
+        using var key = DeviceKey.Create();
+        var client = await Register(key, new IPEndPoint(IPAddress.Parse("10.0.0.9"), 50000));
+        _clients.Add(client);
+        Assert.Equal(NotFoundReason.Busy, (await client.FindAsync(homePc.Client.Id)).Reason);
+        Assert.Equal([(homePc.Client.Id, PcState.Busy), (officePc.Client.Id, PcState.Online)],
+            await client.StatusAsync([homePc.Client.Id, officePc.Client.Id]));
+    }
+
     [Fact]
     public void A_viewer_sends_no_password_to_a_PC_whose_key_is_not_the_one_the_server_gave()
     {

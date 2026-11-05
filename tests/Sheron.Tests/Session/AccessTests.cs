@@ -104,6 +104,36 @@ public class AccessTests : IDisposable
     }
 
     [Fact]
+    public void The_person_sees_the_viewer_s_name_and_the_viewer_hears_this_PC_s_name()
+    {
+        _access.Name = "Office-PC";
+        var link = Link.Viewer(_viewerKey, new IPEndPoint(IPAddress.Loopback, _host.LocalEndPoint.Port), Quick);
+        var access = new ViewerAccess(link, "", name: "Sher-Laptop");
+        _viewers.Add(access);
+        _viewers.Add(link);
+
+        WaitFor(access, AccessResult.AskPerson);
+        Assert.True(_asked.TryDequeue(out var request));
+        Assert.Equal("Sher-Laptop", request!.ViewerName);
+        request.Accept();
+
+        Assert.Equal("Office-PC", WaitFor(access, AccessResult.LetIn).Name);
+        Assert.Equal("Sher-Laptop", _access.ViewerName);
+    }
+
+    [Fact]
+    public void While_this_PC_views_another_a_request_is_answered_busy_and_nobody_is_asked()
+    {
+        _access.Busy = true;
+        var (_, access) = Viewer("unattended 1");
+
+        WaitFor(access, AccessResult.Busy);
+        Assert.Empty(_asked);
+        Assert.False(_access.IsLetIn);
+        Assert.Equal(TimeSpan.Zero, _gate.LockedFor);
+    }
+
+    [Fact]
     public void Deny_refuses_the_viewer()
     {
         var (_, access) = Viewer("");

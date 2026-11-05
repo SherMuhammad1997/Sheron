@@ -13,12 +13,13 @@ public sealed class ConsentRequest
     private readonly HostAccess _owner;
     private readonly long _startedAt = Stopwatch.GetTimestamp();
 
-    internal ConsentRequest(HostAccess owner, int session, IPEndPoint? viewer, byte[]? viewerFingerprint, TimeSpan timeout)
+    internal ConsentRequest(HostAccess owner, int session, IPEndPoint? viewer, byte[]? viewerFingerprint, string viewerName, TimeSpan timeout)
     {
         _owner = owner;
         Session = session;
         Viewer = viewer;
         ViewerFingerprint = viewerFingerprint;
+        ViewerName = viewerName;
         Timeout = timeout;
     }
 
@@ -28,6 +29,9 @@ public sealed class ConsentRequest
     public IPEndPoint? Viewer { get; }
 
     public byte[]? ViewerFingerprint { get; }
+
+    /// <summary>The name the viewer's PC gave; empty when it gave none.</summary>
+    public string ViewerName { get; }
 
     public TimeSpan Timeout { get; }
 
@@ -63,6 +67,9 @@ public sealed class HostAccess : IDisposable
     private bool _checking;
     private ConsentRequest? _pending;
     private Timer? _noAnswer;
+    private string _viewerName = "";
+    private volatile bool _busy;
+    private volatile string _name = "";
 
     public HostAccess(Link link, AccessGate gate, TimeSpan? consentTimeout = null)
     {
@@ -75,6 +82,32 @@ public sealed class HostAccess : IDisposable
     }
 
     public AccessGate Gate { get; }
+
+    /// <summary>
+    /// This PC is in another session, as viewer (PRD decision 5 Nov): every Access request is answered Busy, nothing
+    /// checked and nobody asked.
+    /// </summary>
+    public bool Busy
+    {
+        get => _busy;
+        set => _busy = value;
+    }
+
+    /// <summary>This PC's name, sent to a viewer who is let in.</summary>
+    public string Name
+    {
+        get => _name;
+        set => _name = PcName.Clean(value);
+    }
+
+    /// <summary>The name the current viewer gave; empty until it sends its request, or when it gave none.</summary>
+    public string ViewerName
+    {
+        get
+        {
+            lock (_lock) return _viewerName;
+        }
+    }
 
     /// <summary>Is the current viewer let in (capture and input allowed)?</summary>
     public bool IsLetIn
@@ -118,6 +151,7 @@ public sealed class HostAccess : IDisposable
         {
             _session++;
             _letIn = _checking = false;
+            _viewerName = "";
             hadRequest = EndRequest();
         }
         if (hadRequest) ConsentEnded?.Invoke();
@@ -133,15 +167,23 @@ public sealed class HostAccess : IDisposable
             return;
         }
 
+        if (!ControlMessage.TryReadAccessRequest(message, out string password, out string name)) return;
+        if (_busy)
+        {
+            // Told, then let go: this PC's own session stays free for when the other one ends.
+            Answer(AccessResult.Busy, 0, TimeSpan.Zero);
+            _link.Disconnect();
+            return;
+        }
         int session;
         lock (_lock)
         {
             // One request at a time, and none once let in or while the person is asked.
-            if (_letIn || _checking || _pending is not null || !ControlMessage.TryReadAccessRequest(message, out _)) return;
+            if (_letIn || _checking || _pending is not null) return;
             _checking = true;
+            _viewerName = name;
             session = _session;
         }
-        ControlMessage.TryReadAccessRequest(message, out string password);
         var viewer = _link.Snapshot().PeerFingerprint;
         // The fixed password takes one PBKDF2 (about 0.3 s): not on the link's thread.
         _ = Task.Run(() => OnChecked(session, Gate.Check(password, viewer)));
@@ -157,7 +199,7 @@ public sealed class HostAccess : IDisposable
             if (check.Result == AccessResult.AskPerson)
             {
                 var viewer = _link.Snapshot();
-                request = new ConsentRequest(this, session, viewer.Peer, viewer.PeerFingerprint, _consentTimeout);
+                request = new ConsentRequest(this, session, viewer.Peer, viewer.PeerFingerprint, _viewerName, _consentTimeout);
                 _pending = request;
                 _noAnswer = new Timer(_ => Decide(request, AccessResult.NoAnswer), null, _consentTimeout, System.Threading.Timeout.InfiniteTimeSpan);
             }
@@ -207,12 +249,12 @@ public sealed class HostAccess : IDisposable
             _letIn = true;
         }
         // The answer goes first, so the viewer hears it before the video format.
-        Answer(AccessResult.LetIn, AccessGate.MaxTries, TimeSpan.Zero);
+        Answer(AccessResult.LetIn, AccessGate.MaxTries, TimeSpan.Zero, _name);
         LetIn?.Invoke();
     }
 
-    private void Answer(AccessResult result, int triesLeft, TimeSpan time) =>
-        _link.SendControl(ControlMessage.Answer(new AccessAnswer(result, triesLeft, (int)Math.Ceiling(time.TotalSeconds))));
+    private void Answer(AccessResult result, int triesLeft, TimeSpan time, string? name = null) =>
+        _link.SendControl(ControlMessage.Answer(new AccessAnswer(result, triesLeft, (int)Math.Ceiling(time.TotalSeconds), name)));
 
     /// <summary>Under the lock: drops the waiting request and its timer. True when there was one.</summary>
     private bool EndRequest()
@@ -242,6 +284,7 @@ public sealed class ViewerAccess : IDisposable
 {
     private readonly Link _link;
     private readonly byte[]? _expectedFingerprint;
+    private readonly string _name;
     private readonly object _lock = new();
     private string _password;
     private bool _sent;
@@ -249,10 +292,12 @@ public sealed class ViewerAccess : IDisposable
     private volatile bool _wrongKey;
 
     /// <param name="expectedHostKey">The remote PC's device public key as the server gave it; null for connect by IP.</param>
-    public ViewerAccess(Link link, string password, byte[]? expectedHostKey = null)
+    /// <param name="name">This PC's name, shown to the person at the remote PC.</param>
+    public ViewerAccess(Link link, string password, byte[]? expectedHostKey = null, string name = "")
     {
         _link = link;
         _password = password;
+        _name = PcName.Clean(name);
         _expectedFingerprint = expectedHostKey is null ? null : KeyFingerprint.Of(expectedHostKey);
         _link.Connected += Send;
         _link.ControlReceived += OnControl;
@@ -315,7 +360,7 @@ public sealed class ViewerAccess : IDisposable
             _sent = true;
             password = _password;
         }
-        _link.SendControl(ControlMessage.AccessRequest(password));
+        _link.SendControl(ControlMessage.AccessRequest(password, _name));
     }
 
     private void OnControl(byte[] message)

@@ -62,13 +62,16 @@ public sealed class PacketQueue : IPacketTransport
 /// One UDP socket shared by the session and the connector (TRD › Connect by ID › One socket, two readers): a thread
 /// reads the socket and hands rendezvous messages (0x30–0x35) to <see cref="Rendezvous"/> and everything else to
 /// <see cref="Session"/>; while <see cref="CopyHelloToRendezvous"/> is set, each Hello also goes to the connector.
-/// Both queues send straight out of the socket. Disposing stops the thread; the socket stays its owner's.
+/// While this PC views another (<see cref="OpenViewer"/>), packets from that PC's address go to the viewer's queue
+/// instead (TRD › Connect by ID › Viewer on the shared socket). All queues send straight out of the socket. Disposing
+/// stops the thread; the socket stays its owner's.
 /// </summary>
 public sealed class PacketMux : IDisposable
 {
     private readonly IPacketTransport _socket;
     private readonly Thread _thread;
     private volatile bool _stopping;
+    private volatile ViewerRoute? _viewer;
 
     public PacketMux(IPacketTransport socket)
     {
@@ -87,6 +90,24 @@ public sealed class PacketMux : IDisposable
     public PacketQueue Rendezvous { get; }
 
     public bool CopyHelloToRendezvous { get; set; }
+
+    /// <summary>
+    /// A new queue for this PC's own viewer session: from now on, non-rendezvous packets from <paramref name="remote"/>
+    /// (the other PC, or the relay) go there and not to <see cref="Session"/>. Replaces an earlier viewer queue, which
+    /// then gets nothing more; a queue is never closed under its link.
+    /// </summary>
+    public PacketQueue OpenViewer(IPEndPoint remote)
+    {
+        var queue = new PacketQueue(_socket.LocalEndPoint, _socket.Send);
+        _viewer = new ViewerRoute(remote, queue);
+        return queue;
+    }
+
+    /// <summary>The viewer session ended: everything goes to <see cref="Session"/> again.</summary>
+    public void CloseViewer() => _viewer = null;
+
+    /// <summary>Where the viewer's packets come from; null when this PC views nobody.</summary>
+    public IPEndPoint? ViewerRemote => _viewer?.Remote;
 
     /// <summary>A rendezvous message: address check, address seen, relay join and ready, punch and punch ack.</summary>
     public static bool IsRendezvous(byte first) => first is >= 0x30 and <= 0x35;
@@ -112,6 +133,11 @@ public sealed class PacketMux : IDisposable
                 Rendezvous.Add(packet, from);
                 continue;
             }
+            if (_viewer is { } viewer && from.Equals(viewer.Remote))
+            {
+                viewer.Queue.Add(packet, from);
+                continue;
+            }
             Session.Add(packet, from);
             if (packet[0] == (byte)PacketKind.Hello && CopyHelloToRendezvous) Rendezvous.Add(packet, from);
         }
@@ -124,4 +150,6 @@ public sealed class PacketMux : IDisposable
         Session.Close();
         Rendezvous.Close();
     }
+
+    private sealed record ViewerRoute(IPEndPoint Remote, PacketQueue Queue);
 }

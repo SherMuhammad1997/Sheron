@@ -63,4 +63,41 @@ public class PacketMuxTests
         Assert.Equal([7], elsewhere);
         Assert.False(a.TryReceive(buffer, TimeSpan.FromMilliseconds(100), out _, out _));
     }
+
+    [Fact]
+    public void While_this_PC_views_another_that_PC_s_packets_go_to_the_viewer_and_the_rest_as_before()
+    {
+        var net = new SimNetwork();
+        var lan = net.AddSite("home", IPAddress.Parse("203.0.113.5"));
+        var viewed = net.Bind(lan, new IPEndPoint(IPAddress.Parse("192.168.1.20"), 5000));
+        var other = net.Bind(lan, new IPEndPoint(IPAddress.Parse("192.168.1.22"), 5000));
+        var b = net.Bind(lan, new IPEndPoint(IPAddress.Parse("192.168.1.21"), 5000));
+        using var mux = new PacketMux(b);
+
+        var viewer = mux.OpenViewer(viewed.LocalEndPoint);
+        Assert.Equal(viewed.LocalEndPoint, mux.ViewerRemote);
+        viewed.Send([0x11], b.LocalEndPoint);
+        viewed.Send([0x34], b.LocalEndPoint);   // rendezvous messages still go to the connector
+        other.Send([0x12], b.LocalEndPoint);
+
+        Assert.Equal(0x11, Next(viewer));
+        Assert.Equal(-1, Next(viewer));
+        Assert.Equal(0x34, Next(mux.Rendezvous));
+        Assert.Equal(0x12, Next(mux.Session));
+
+        // A new viewer queue (the relay after a direct path failed) takes over; the old one gets nothing more.
+        var relayed = mux.OpenViewer(other.LocalEndPoint);
+        other.Send([0x13], b.LocalEndPoint);
+        viewed.Send([0x14], b.LocalEndPoint);
+        Assert.Equal(0x13, Next(relayed));
+        Assert.Equal(0x14, Next(mux.Session));
+        Assert.Equal(-1, Next(viewer));
+
+        // Viewing over: everything goes to this PC's own session.
+        mux.CloseViewer();
+        Assert.Null(mux.ViewerRemote);
+        other.Send([0x15], b.LocalEndPoint);
+        Assert.Equal(0x15, Next(mux.Session));
+        Assert.Equal(-1, Next(relayed));
+    }
 }

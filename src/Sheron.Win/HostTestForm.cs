@@ -1,19 +1,10 @@
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
-using System.Security.Authentication;
-using System.Security.Cryptography;
 using Sheron.Core.Capture;
-using Sheron.Core.Net;
 using Sheron.Core.Rendezvous;
 using Sheron.Core.Security;
 using Sheron.Core.Session;
-using Sheron.Core.Video;
 using LinkState = Sheron.Core.Session.LinkState;
 using Sheron.Win.Capture;
-using Sheron.Win.Encode;
-using Sheron.Win.Input;
-using Sheron.Win.Security;
 
 namespace Sheron.Win;
 
@@ -23,7 +14,8 @@ namespace Sheron.Win;
 /// the Sheron server (TRD › Connect by ID), or by IP on the same network. The person here must Accept each viewer
 /// (TRD › Passwords and consent; PRD decision 4 Nov); the fixed password lets in with nobody asked. Sharing and control
 /// last only while this window is open; there is no hidden mode (CLAUDE.md › Hard rules).
-/// Open with <c>Sheron.Win.exe --host [--port 47920]</c>.
+/// Open with <c>Sheron.Win.exe --host [--port 47920]</c>. The work is <see cref="ThisPc"/>'s, as in the home window
+/// (Plan step 15a); this window only shows its figures.
 /// </summary>
 internal sealed class HostTestForm : DevForm
 {
@@ -33,38 +25,18 @@ internal sealed class HostTestForm : DevForm
     private static readonly Color Panel = Color.FromArgb(0x15, 0x1E, 0x28);
     private static readonly Color PanelHover = Color.FromArgb(0x1C, 0x28, 0x36);
 
-    private readonly int _port;
-    private readonly bool _allowHardwareEncoder;
+    private readonly ThisPc _pc;
     private readonly string _addresses = LocalAddresses();
     private readonly Font _requestFont = new("Segoe UI Semibold", 11f);
     private readonly Font _requestTextFont = new("Segoe UI", 10f);
-    private DeviceKey? _key;
-    private AccessGate? _gate;
-    private HostAccess? _access;
     private ConsentRequest? _request;
     private Rectangle _acceptButton;
     private Rectangle _denyButton;
     private Rectangle? _hover;
-    private readonly Stopwatch _clock = Stopwatch.StartNew();
-    private readonly InputInjector _input = new();
-    private Link? _link;
-    private string? _linkError;
-    // Automatic quality (Plan step 10).
-    private readonly object _qualityLock = new();
-    private QualityController _quality = new();
-    // Connect by ID (Plan step 14): one UDP socket shared by the session and the connector.
-    private readonly CancellationTokenSource _closing = new();
-    private UdpTransport? _udp;
-    private PacketMux? _mux;
-    private volatile RendezvousClient? _client;
-    private volatile HostRendezvous? _rendezvous;
-    private volatile string _server = "–";
-    private volatile bool _serverBad;
-    private (uint Id, IPEndPoint From)? _lastCaller;
-    private CaptureLoop? _capture;
     private CaptureLoopSnapshot? _captureSnapshot;
     private LinkSnapshot? _linkSnapshot;
     private (TimeSpan At, int Frames, long Bytes) _last;
+    private readonly Stopwatch _clock = Stopwatch.StartNew();
     private double _framesPerSecond;
     private double _megabitsPerSecond;
 
@@ -72,118 +44,16 @@ internal sealed class HostTestForm : DevForm
         : base("sharing this screen (developer)", "Sharing this screen · a viewer needs this PC's ID and your OK · close this window to stop",
             new Size(1040, 348), headerHeight: 348, rowsPerColumn: 9, withVideo: false)
     {
-        _port = port;
-        _allowHardwareEncoder = allowHardwareEncoder;
+        _pc = new ThisPc(port, allowHardwareEncoder);
     }
 
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
-        try
-        {
-            var secrets = SecretStore.ThisPc();
-            _key = DeviceKey.Import(secrets.DevicePrivateKey);
-            _gate = new AccessGate(secrets.FixedPassword);
-            _udp = new UdpTransport(_port);
-            _mux = new PacketMux(_udp);
-            _link = Link.Host(_key, _mux.Session);
-            _access = new HostAccess(_link, _gate);
-            // Capture runs only once the viewer is let in, so its first frame is a keyframe and nothing shows before.
-            _access.LetIn += () => OnUiThread(StartSharing);
-            _access.ConsentNeeded += request => OnUiThread(() => ShowRequest(request));
-            _access.ConsentEnded += () => OnUiThread(HideRequest);
-            // Nothing the viewer held stays pressed once it is gone (TRD › Input path › Stuck keys).
-            // The viewer's reports drive automatic quality, once it is let in and sharing.
-            _link.ReportReceived += report =>
-            {
-                if (_access?.IsLetIn == true) OnReport(report);
-            };
-            _link.Disconnected += () =>
-            {
-                _input.ReleaseAll();
-                OnUiThread(StopSharing);
-            };
-            // Only messages from a viewer who is let in come through.
-            _access.ControlReceived += message =>
-            {
-                if (ControlMessage.TypeOf(message) == ControlType.KeyFrameRequest) Volatile.Read(ref _capture)?.RequestKeyFrame();
-                else _input.Apply(message);
-            };
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or CryptographicException)
-        {
-            _linkError = $"Cannot read this PC's Sheron secrets: {error.Message}";
-        }
-        catch (SocketException error)
-        {
-            _linkError = $"Cannot use UDP port {_port}: {error.Message}";
-        }
+        _pc.ConsentNeeded += ShowRequest;
+        _pc.ConsentEnded += HideRequest;
+        _pc.Start();
         StartRefresh();
-        if (_mux is not null) _ = KeepRegistered(_key!, _mux);
-    }
-
-    /// <summary>
-    /// Registers with the Sheron server and stays registered, so viewers find this PC by its ID; a lost link is tried
-    /// again every 10 s (TRD › Connect by ID).
-    /// </summary>
-    private async Task KeepRegistered(DeviceKey key, PacketMux mux)
-    {
-        while (!_closing.IsCancellationRequested)
-        {
-            RendezvousClient? client = null;
-            HostRendezvous? rendezvous = null;
-            try
-            {
-                _server = $"connecting to {ServerConfig.Host} …";
-                _serverBad = false;
-                var lan = LocalNetwork.IPv4Addresses()
-                    .Select(ip => new PeerAddress(AddressKind.Lan, new IPEndPoint(ip, _udp!.LocalEndPoint.Port))).ToList();
-                client = await RendezvousClient.ConnectAsync(ServerConfig.Host, ServerConfig.Port, ServerConfig.Pin, key, lan, _closing.Token);
-                _closing.Token.ThrowIfCancellationRequested();
-                var gone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                client.Disconnected += () => gone.TrySetResult();
-                rendezvous = new HostRendezvous(client, mux, ServerConfig.UdpEndPoint);
-                rendezvous.PathFound += (caller, _, from) => _lastCaller = (caller.Id, from);
-                _client = client;
-                _rendezvous = rendezvous;
-                bool udp = await rendezvous.CheckAddressAsync(_closing.Token);
-                _server = udp
-                    ? $"registered · UDP works, seen as {rendezvous.Connector.PublicUdp}"
-                    : "registered · UDP blocked here: viewers come over TCP 443";
-                await gone.Task.WaitAsync(_closing.Token);
-                _server = "link to the server lost · trying again in 10 s";
-                _serverBad = true;
-            }
-            catch (AuthenticationException)
-            {
-                _server = "the server's pin does not match: not our server";
-                _serverBad = true;
-            }
-            catch (Exception error) when (error is SocketException or IOException or InvalidDataException)
-            {
-                _server = $"cannot reach the server ({error.Message}) · trying again in 10 s";
-                _serverBad = true;
-            }
-            catch (Exception error) when (error is OperationCanceledException or ObjectDisposedException)
-            {
-                return;   // the window closed
-            }
-            finally
-            {
-                _rendezvous = null;
-                _client = null;
-                rendezvous?.Dispose();
-                if (client is not null) await client.DisposeAsync();
-            }
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(10), _closing.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-        }
     }
 
     /// <summary>A viewer asks to connect: the person here is asked, in this window, which comes to the front.</summary>
@@ -197,42 +67,15 @@ internal sealed class HostTestForm : DevForm
 
     private void HideRequest()
     {
-        if (_access?.Pending is not null) return;
+        if (_pc.Pending is not null) return;
         _request = null;
         Invalidate();
     }
 
-    private void StartSharing()
-    {
-        StopSharing();
-        if (_link is null) return;
-        // Each viewer starts at the best level; the viewer's reports and this PC's CPU move it (TRD › Automatic quality).
-        lock (_qualityLock) _quality = new QualityController();
-        _capture = new CaptureLoop(_allowHardwareEncoder, new LinkSender(_link));
-    }
-
-    /// <summary>On the link's thread, every 250 ms while a viewer is let in.</summary>
-    private void OnReport(LinkReport report)
-    {
-        lock (_qualityLock)
-            if (_quality.OnReport(report, _clock.Elapsed)) Volatile.Read(ref _capture)?.SetQuality(_quality.Current);
-    }
-
-    private void StopSharing()
-    {
-        _capture?.Dispose();
-        _capture = null;
-        _captureSnapshot = null;
-    }
-
     protected override void ReadFigures()
     {
-        // The CPU guard: Sheron's own share of this PC (TRD › Automatic quality).
-        if (_capture is { } capture)
-            lock (_qualityLock)
-                if (_quality.OnCpu(CpuPercent, _clock.Elapsed)) capture.SetQuality(_quality.Current);
-        _captureSnapshot = _capture?.Snapshot();
-        _linkSnapshot = _link?.Snapshot();
+        _captureSnapshot = _pc.CaptureSnapshot();
+        _linkSnapshot = _pc.LinkSnapshot();
         if (_linkSnapshot is { } l)
         {
             var now = _clock.Elapsed;
@@ -248,45 +91,40 @@ internal sealed class HostTestForm : DevForm
         var l = _linkSnapshot;
         var c = _captureSnapshot;
         bool connected = l?.State == LinkState.Connected;
-        bool viewed = connected && _access?.IsLetIn == true;
-        var locked = _gate?.LockedFor ?? TimeSpan.Zero;
-        (string Text, Color? Color) status = _linkError is not null ? (_linkError, Bad)
+        bool viewed = connected && _pc.IsShared;
+        var locked = _pc.Gate?.LockedFor ?? TimeSpan.Zero;
+        (string Text, Color? Color) status = _pc.Problem is { } problem ? (problem, Bad)
             : locked > TimeSpan.Zero ? ($"Locked for {Math.Ceiling(locked.TotalSeconds)} s after 3 wrong passwords", Bad)
             : _request is not null ? ("A viewer is asking: Accept or Deny below", Accent)
             : viewed ? ("Being viewed", Accent)
             : connected ? ("A viewer connected · checking the password", null)
-            : ($"Waiting for a viewer on UDP {_port}", null);
-
-        var client = _client;
-        var caller = _lastCaller;
+            : ($"Waiting for a viewer on UDP {_pc.Port}", null);
 
         // Left column: who, and how to reach this PC.
         yield return ("Status", status.Text, status.Color);
-        yield return ("This PC's ID", client is { Id: not 0 } ? RendezvousWire.Show(client.Id) : "–", Accent);
-        yield return ("Server", _server, _serverBad ? Bad : null);
-        yield return ("This PC", $"{_addresses} · port {_port}", null);
-        yield return ("This PC's key", _key is null ? "–" : KeyFingerprint.Show(_key.Fingerprint), null);
-        yield return ("Viewer", !connected ? "–"
-            : caller is { } known && known.From.Equals(l!.Peer) ? $"ID {RendezvousWire.Show(known.Id)}" : "by IP address", null);
+        yield return ("This PC's ID", _pc.Id is { } id ? RendezvousWire.Show(id) : "–", Accent);
+        yield return ("Server", _pc.ServerDetail, _pc.Server is ServerState.Offline or ServerState.WrongServer ? Bad : null);
+        yield return ("This PC", $"{_addresses} · port {_pc.Port}", null);
+        yield return ("This PC's key", _pc.Key is { } key ? KeyFingerprint.Show(key.Fingerprint) : "–", null);
+        yield return ("Viewer", connected ? $"{_pc.Viewer.Name} · {_pc.Viewer.Where}" : "–", null);
         yield return ("Viewer's key", connected && l!.PeerFingerprint is { } fingerprint ? KeyFingerprint.Show(fingerprint) : "–", null);
         yield return ("Path", connected ? ServerConfig.PathOf(l!.Peer) : "–", connected ? Accent : null);
 
         // Right column: how much.
-        yield return ("Unattended", _gate?.FixedPassword is null ? "off · every viewer must be accepted here" : "on · the fixed password lets in with nobody asked", null);
+        yield return ("Unattended", _pc.Gate?.FixedPassword is null ? "off · every viewer must be accepted here" : "on · the fixed password lets in with nobody asked", null);
         yield return ("Encoder", c?.Encoder ?? "–", null);
         yield return ("Graphics", c?.Adapter ?? "–", null);
         yield return ("Capture", c is null ? "–" : $"{c.Stats.FramesPerSecond} fps · {c.Stats.AverageFrameMs:0.00} ms", null);
         yield return ("Sent", viewed ? $"{_framesPerSecond:0} frames/s · {_megabitsPerSecond:0.0} Mbit/s" : "–", null);
         yield return ("Round trip", l?.RoundTrip is { } rtt && viewed ? $"{rtt.TotalMilliseconds:0} ms" : "–", null);
-        string quality;
-        lock (_qualityLock) quality = $"{_quality.Current}{(_quality.CpuCap > 0 ? " · CPU guard" : "")}";
+        string quality = _pc.Quality();
         yield return ("Quality", !viewed ? "–"
             : l!.LastReport is { } r ? $"{quality} · loss {l.PacketLoss:P1} · queue {r.QueueMs} ms · jitter {r.JitterMs} ms" : quality, null);
-        long lastInput = _input.LastInputAt;
+        long lastInput = _pc.Input.LastInputAt;
         yield return ("Control", !viewed ? "–"
             : lastInput == 0 ? "not used yet"
             : $"last input {Stopwatch.GetElapsedTime(lastInput).TotalSeconds:0.0} s ago"
-                + (_input.Blocked > 0 ? $" · {_input.Blocked} blocked by Windows" : ""), viewed && lastInput != 0 ? Accent : null);
+                + (_pc.Input.Blocked > 0 ? $" · {_pc.Input.Blocked} blocked by Windows" : ""), viewed && lastInput != 0 ? Accent : null);
         yield return ("Sheron CPU", $"{CpuPercent:0.0} % of this PC (last 3 s)", null);
     }
 
@@ -368,41 +206,10 @@ internal sealed class HostTestForm : DevForm
     {
         if (disposing)
         {
-            StopSharing();
-            _closing.Cancel();
-            _rendezvous?.Dispose();
-            _client?.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(2));
-            _access?.Dispose();
-            _link?.Dispose();
-            _mux?.Dispose();
-            _udp?.Dispose();
-            _input.ReleaseAll();
-            _key?.Dispose();
+            _pc.Dispose();
             _requestFont.Dispose();
             _requestTextFont.Dispose();
         }
         base.Dispose(disposing);
-    }
-
-    /// <summary>Hands what the capture loop makes to the link: the video format first, then frames and pointer changes.</summary>
-    private sealed class LinkSender(Link link) : ICaptureSink
-    {
-        private (int Width, int Height) _format;
-
-        public void OnVideo(EncodedFrame frame, int width, int height, long capturedAt, long encodedAt)
-        {
-            if ((width, height) != _format)
-            {
-                link.SendControl(ControlMessage.VideoFormat(width, height));
-                _format = (width, height);
-            }
-            link.SendFrame(frame.Data, frame.KeyFrame, capturedAt);
-        }
-
-        public void OnPointer(PointerPosition? position, PointerShape? shape)
-        {
-            if (shape is not null) link.SendControl(ControlMessage.Pointer(shape));
-            if (position is { } at) link.SendControl(ControlMessage.Pointer(at));
-        }
     }
 }

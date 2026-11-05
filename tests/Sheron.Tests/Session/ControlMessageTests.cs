@@ -62,6 +62,46 @@ public class ControlMessageTests
     }
 
     [Fact]
+    public void Names_go_with_the_request_and_with_Let_in_and_old_messages_still_read()
+    {
+        Assert.True(ControlMessage.TryReadAccessRequest(ControlMessage.AccessRequest("", "Sher-Laptop"), out string password, out string name));
+        Assert.Equal(("", "Sher-Laptop"), (password, name));
+        // Before Plan step 15a: the password only, no name.
+        Assert.True(ControlMessage.TryReadAccessRequest([(byte)ControlType.AccessRequest, 1, (byte)'a'], out password, out name));
+        Assert.Equal(("a", ""), (password, name));
+        Assert.False(ControlMessage.TryReadAccessRequest([(byte)ControlType.AccessRequest, 0, 3, (byte)'a'], out _, out _));   // name shorter than its length
+
+        var letIn = new AccessAnswer(AccessResult.LetIn, 3, 0, "Office-PC");
+        Assert.True(ControlMessage.TryReadAnswer(ControlMessage.Answer(letIn), out var back));
+        Assert.Equal(letIn, back);
+        // The name goes only with Let in.
+        Assert.True(ControlMessage.TryReadAnswer(ControlMessage.Answer(new AccessAnswer(AccessResult.Denied, 0, 0, "Office-PC")), out back));
+        Assert.Null(back.Name);
+        Assert.True(ControlMessage.TryReadAnswer([(byte)ControlType.AccessAnswer, 8, 0, 0, 0], out back));   // 5 bytes, as before
+        Assert.Equal(new AccessAnswer(AccessResult.Busy, 0, 0), back);
+    }
+
+    [Theory]
+    [InlineData("Office-PC", "Office-PC")]
+    [InlineData("  Sher\tLaptop \n", "SherLaptop")]
+    [InlineData("A name that is much longer than thirty-two characters", "A name that is much longer than ")]
+    [InlineData(null, "")]
+    public void A_PC_name_is_cleaned_and_cut_to_32_characters(string? given, string kept)
+    {
+        Assert.Equal(kept.Trim(), PcName.Clean(given));
+    }
+
+    [Fact]
+    public void A_PC_name_is_cut_by_whole_characters_to_64_bytes()
+    {
+        string cleaned = PcName.Clean(new string('ق', 40));   // 2 bytes each in UTF-8
+        Assert.Equal(32, cleaned.Length);
+        string emoji = PcName.Clean(string.Concat(Enumerable.Repeat("😀", 20)));   // 4 bytes each
+        Assert.Equal(16, System.Globalization.StringInfo.ParseCombiningCharacters(emoji).Length);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(emoji) <= PcName.MaxBytes);
+    }
+
+    [Fact]
     public void Clock_and_report_messages_read_back()
     {
         Assert.True(ControlMessage.TryReadClockProbe(ControlMessage.ClockProbe(123_456_789), out long sent));

@@ -32,6 +32,18 @@ public class RendezvousTests : IDisposable
         RendezvousClient.ConnectAsync("127.0.0.1", server.LocalEndPoint.Port, Pin, key,
             [new PeerAddress(AddressKind.Lan, new IPEndPoint(IPAddress.Parse("192.168.1.20"), udpPort))], pingEvery: pingEvery);
 
+    /// <summary>Asks again until the answer is right: another connection's message may not have reached the server yet.</summary>
+    private static async Task<bool> WithinAsync(Func<Task<bool>> condition, int ms = 5000)
+    {
+        var clock = Stopwatch.StartNew();
+        while (!await condition())
+        {
+            if (clock.ElapsedMilliseconds > ms) return false;
+            await Task.Delay(20);
+        }
+        return true;
+    }
+
     private static bool Within(Func<bool> condition, int ms = 5000)
     {
         var clock = Stopwatch.StartNew();
@@ -140,6 +152,70 @@ public class RendezvousTests : IDisposable
 
         for (int i = 0; i < 3; i++) Assert.Equal(NotFoundReason.Unknown, (await asker.FindAsync(123_456_789)).Reason);
         Assert.Equal(NotFoundReason.TooManyTries, (await asker.FindAsync(123_456_789)).Reason);
+    }
+
+    [Fact]
+    public async Task A_PC_in_a_session_is_not_introduced_to_anyone()
+    {
+        await using var server = Server();
+        using var keyA = DeviceKey.Create();
+        using var keyB = DeviceKey.Create();
+        await using var a = await Connect(server, keyA, 50001);
+        await using var b = await Connect(server, keyB, 50002);
+        var incoming = new ConcurrentQueue<PeerInfo>();
+        b.Incoming += incoming.Enqueue;
+
+        await b.SetBusyAsync(true);
+        Assert.True(await WithinAsync(async () => (await a.FindAsync(b.Id)).Reason == NotFoundReason.Busy));
+        Assert.Empty(incoming);
+
+        // Free again: found as before.
+        await b.SetBusyAsync(false);
+        Assert.True(await WithinAsync(async () => (await a.FindAsync(b.Id)).Peer is not null));
+    }
+
+    [Fact]
+    public async Task Status_says_which_PCs_are_online_in_a_session_or_offline()
+    {
+        await using var server = Server();
+        using var keyA = DeviceKey.Create();
+        using var keyB = DeviceKey.Create();
+        using var keyC = DeviceKey.Create();
+        using var keyD = DeviceKey.Create();
+        await using var a = await Connect(server, keyA, 50001);
+        await using var b = await Connect(server, keyB, 50002);
+        await using var c = await Connect(server, keyC, 50003);
+        var d = await Connect(server, keyD, 50004);
+        uint offline = d.Id;
+        await d.DisposeAsync();
+        await c.SetBusyAsync(true);
+        uint unknown = RendezvousWire.DigitId(9999) == b.Id ? RendezvousWire.DigitId(9998) : RendezvousWire.DigitId(9999);
+
+        IReadOnlyList<(uint Id, PcState State)> states = [];
+        Assert.True(await WithinAsync(async () =>
+        {
+            states = await a.StatusAsync([b.Id, c.Id, offline, unknown]);
+            return states.Count == 4 && states[1].State == PcState.Busy && states[2].State == PcState.Offline;
+        }));
+
+        Assert.Equal([(b.Id, PcState.Online), (c.Id, PcState.Busy), (offline, PcState.Offline), (unknown, PcState.Offline)], states);
+    }
+
+    [Fact]
+    public async Task Status_over_its_limit_is_answered_not_checked_and_finds_still_work()
+    {
+        await using var server = Server(ServerOptions.Default with { StatusIdsPerMinute = 5 });
+        using var keyA = DeviceKey.Create();
+        using var keyB = DeviceKey.Create();
+        await using var a = await Connect(server, keyA, 50001);
+        await using var b = await Connect(server, keyB, 50002);
+        var ten = Enumerable.Repeat(b.Id, 4).ToList();
+
+        Assert.All(await a.StatusAsync(ten), s => Assert.Equal(PcState.Online, s.State));
+        // 4 + 4 is over 5 a minute: none of these are looked up.
+        Assert.All(await a.StatusAsync(ten), s => Assert.Equal(PcState.NotChecked, s.State));
+        // Its own limit: Find is not used up by Status.
+        Assert.NotNull((await a.FindAsync(b.Id)).Peer);
     }
 
     [Fact]

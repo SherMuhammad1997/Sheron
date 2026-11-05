@@ -31,6 +31,12 @@ public enum RendezvousType : byte
     RelayJoin = 14,
     /// <summary>PC on the TCP relay → server: one packet for the other PC.</summary>
     RelaySend = 15,
+    /// <summary>PC → server: in a session (1) or free (0); a busy PC is not introduced to anyone (Plan step 15a).</summary>
+    Busy = 16,
+    /// <summary>PC → server: which of these IDs are online (the home's Recent list).</summary>
+    Status = 17,
+    /// <summary>Server → PC: the answer to Status.</summary>
+    StatusAnswer = 18,
 }
 
 /// <summary>Byte 0 of the UDP messages around a session: with the server, and between the two PCs (Plan step 12).</summary>
@@ -64,6 +70,20 @@ public enum NotFoundReason : byte
     Unknown = 1,
     Offline = 2,
     TooManyTries = 3,
+    /// <summary>That PC is in another session (PRD decision 5 Nov).</summary>
+    Busy = 4,
+}
+
+/// <summary>A PC as the server's Status answer gives it.</summary>
+public enum PcState : byte
+{
+    /// <summary>Not looked up: too many lookups this minute.</summary>
+    NotChecked = 0,
+    /// <summary>Not online, or no PC has that ID.</summary>
+    Offline = 1,
+    Online = 2,
+    /// <summary>Online, in a session.</summary>
+    Busy = 3,
 }
 
 /// <summary>A UDP address where a PC may be reached.</summary>
@@ -293,6 +313,53 @@ public static class RendezvousWire
         byte[] asList = [1, (byte)AddressKind.Public, .. packet[1..]];
         if (!TryReadAddresses(asList, out var list, out int used) || used != asList.Length) return false;
         seen = list[0].EndPoint;
+        return true;
+    }
+
+    /// <summary>The most IDs one Status may ask about.</summary>
+    public const int MaxStatusIds = 10;
+
+    /// <summary>A Status body: count, then the IDs.</summary>
+    public static byte[] Status(IReadOnlyList<uint> ids)
+    {
+        if (ids.Count is < 1 or > MaxStatusIds) throw new ArgumentOutOfRangeException(nameof(ids));
+        var body = new byte[1 + 4 * ids.Count];
+        body[0] = (byte)ids.Count;
+        for (int i = 0; i < ids.Count; i++) BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(1 + 4 * i), ids[i]);
+        return body;
+    }
+
+    public static bool TryReadStatus(ReadOnlySpan<byte> body, out List<uint> ids)
+    {
+        ids = [];
+        if (body.Length < 1 || body[0] is < 1 or > MaxStatusIds || body.Length != 1 + 4 * body[0]) return false;
+        for (int i = 0; i < body[0]; i++) ids.Add(BinaryPrimitives.ReadUInt32LittleEndian(body[(1 + 4 * i)..]));
+        return true;
+    }
+
+    /// <summary>A Status answer body: count, then per ID the ID and its state.</summary>
+    public static byte[] StatusAnswer(IReadOnlyList<(uint Id, PcState State)> states)
+    {
+        var body = new byte[1 + 5 * states.Count];
+        body[0] = (byte)states.Count;
+        for (int i = 0; i < states.Count; i++)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(1 + 5 * i), states[i].Id);
+            body[5 + 5 * i] = (byte)states[i].State;
+        }
+        return body;
+    }
+
+    public static bool TryReadStatusAnswer(ReadOnlySpan<byte> body, out List<(uint Id, PcState State)> states)
+    {
+        states = [];
+        if (body.Length < 1 || body.Length != 1 + 5 * body[0]) return false;
+        for (int i = 0; i < body[0]; i++)
+        {
+            var state = (PcState)body[5 + 5 * i];
+            if (!Enum.IsDefined(state)) return false;
+            states.Add((BinaryPrimitives.ReadUInt32LittleEndian(body[(1 + 5 * i)..]), state));
+        }
         return true;
     }
 

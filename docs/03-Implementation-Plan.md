@@ -75,6 +75,9 @@ GATE 4: all 11 PRD acceptance checks pass
 | # | Step | Done when |
 | --- | --- | --- |
 | 15 | Screens from the design: home, session toolbar, incoming request, banner, settings (custom-painted) | Screens match the design canvas; Sher approves |
+| 15a | Home (layout 3, wordmark, bundled IBM Plex) that also shares this PC: one socket and one registration for both roles, one session at a time; Recent list with online dots; incoming request and banner (PRD decision 5 Nov) | Unit and simulator tests pass; on Sher's laptops each home shows its ID, Connect by ID asks the other PC, the banner shows for the whole session, and Recent shows the other PC online |
+| 15b | Session window: thin toolbar (delay, fps, Direct/Relay, size, Quality menu, Ctrl+Alt+Del, full screen, Disconnect); key pinning | Matches the Session board; Sher approves |
+| 15c | Settings: unattended password, PC name, start with Windows, default quality, server | Matches the Settings board; Sher approves |
 | 16 | One-time and fixed passwords (PBKDF2), DPAPI secrets, 3 tries then 30 s lock | Unit tests pass; PRD A3 and A9 pass |
 | 16b | 4-character IDs (digits first, then letters) and connect by ID alone with Accept; request limits (added 4 Nov, PRD decision) | Unit tests pass; Sher's laptops get 4-character IDs and connect by ID with Accept, no password |
 | 17 | Unattended service: agent in the active session, lock screen, UAC, Ctrl+Alt+Del | PRD A5 passes |

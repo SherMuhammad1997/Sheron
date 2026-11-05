@@ -14,6 +14,8 @@ public enum AccessResult : byte
     NoAnswer = 6,
     /// <summary>This viewer was refused 3 times within 10 minutes: its requests are refused for a while, nobody asked.</summary>
     TooManyRequests = 7,
+    /// <summary>The remote PC is in another session (PRD decision 5 Nov): nothing checked, nobody asked.</summary>
+    Busy = 8,
 }
 
 /// <summary>What a password check gave: the result, the tries left before the lock, and the lock time left.</summary>

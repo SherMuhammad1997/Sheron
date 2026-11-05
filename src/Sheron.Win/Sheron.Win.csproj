@@ -30,6 +30,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- IBM Plex Sans and Mono, SIL OFL 1.1 (TRD › Windows UI › Fonts; third_party/ibm-plex/README.md): built in, loaded by Ui/Fonts.cs. -->
+    <EmbeddedResource Include="..\..\third_party\ibm-plex\*.ttf" LogicalName="Sheron.Win.Fonts.%(Filename)%(Extension)" />
+    <None Include="..\..\third_party\ibm-plex\OFL.txt" Link="IBM-Plex-OFL.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Intel oneVPL dispatcher, MIT (TRD › Third-party components; third_party/libvpl/README.md). -->
     <None Include="..\..\third_party\libvpl\libvpl.dll" Link="libvpl.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

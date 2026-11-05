@@ -10,18 +10,26 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
         // Developer windows instead of the app: --capture-test for Plan steps 3–4, --loop-test for step 5,
-        // --host [--port N] for step 8, and --view <ID or IP>, which fills in the start window (the password is typed
-        // there, never given on the command line), and --server <IP>[:port] --pin <pin> for step 13 (register with the
-        // server). --software-encoder and --software-decoder skip the hardware routes.
+        // --host [--port N] for step 8, and --server <IP>[:port] --pin <pin> for step 13 (register with the server).
+        // --view <ID or IP> fills in the home window's partner box (the password is typed there, never given on the
+        // command line). --software-encoder and --software-decoder skip the hardware routes.
         bool hardwareEncoder = !args.Contains("--software-encoder");
         bool hardwareDecoder = !args.Contains("--software-decoder");
-        Form? first = args.Contains("--capture-test") ? new CaptureTestForm(hardwareEncoder)
+        bool developer = args.Contains("--capture-test") || args.Contains("--loop-test") || args.Contains("--host") || args.Contains("--server");
+        // One home window per PC: it holds this PC's socket and registration (TRD › Connect by ID › One registration per PC).
+        using var single = new Mutex(initiallyOwned: true, @"Local\Sheron home window", out bool first);
+        if (!developer && !first)
+        {
+            MessageBox.Show("Sheron is already open on this PC: look for it in the taskbar.", "Sheron", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        Form? window = args.Contains("--capture-test") ? new CaptureTestForm(hardwareEncoder)
             : args.Contains("--loop-test") ? new LoopTestForm(hardwareEncoder, hardwareDecoder)
             : args.Contains("--host") ? HostForm(args, hardwareEncoder)
-            : args.Contains("--view") ? ViewerForm(args, hardwareDecoder)
             : args.Contains("--server") ? ServerForm(args)
-            : new MainForm(hardwareDecoder: hardwareDecoder);
-        if (first is not null) Application.Run(first);
+            : args.Contains("--view") ? HomeWithAddress(args, hardwareDecoder, hardwareEncoder)
+            : new HomeForm(hardwareDecoder: hardwareDecoder, hardwareEncoder: hardwareEncoder);
+        if (window is not null) Application.Run(window);
     }
 
     private static Form? HostForm(string[] args, bool hardwareEncoder)
@@ -33,12 +41,12 @@ internal static class Program
         return new HostTestForm(port, hardwareEncoder);
     }
 
-    private static Form? ViewerForm(string[] args, bool hardwareDecoder)
+    private static Form? HomeWithAddress(string[] args, bool hardwareDecoder, bool hardwareEncoder)
     {
         string? text = ValueAfter(args, "--view");
         if (text is null || (!Core.Rendezvous.RendezvousWire.TryParseId(text, out _) && !IPEndPoint.TryParse(text, out _)))
             return Refuse("Give the remote PC's ID or address after --view, such as --view 4821 or --view 192.168.1.20.");
-        return new MainForm(text, hardwareDecoder);
+        return new HomeForm(text, hardwareDecoder, hardwareEncoder);
     }
 
     private static Form? ServerForm(string[] args)

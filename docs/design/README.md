@@ -12,7 +12,7 @@ Five boards for version 1, in the Control Room style (PRD decision #1, 25 Oct). 
 
 ## Layouts and logo (1 Nov)
 
-`LayoutsAndLogos.html` (rendered: https://claude.ai/artifact/UkeKg4KL8xAaLxUiuEjudD) holds 10 main-window layouts and 10 logo ideas. Sher chose **layout 3, "Address bar"**: partner ID, password and Connect in one line at the top; this PC's ID and one-time password below on the left, Recent on the right. Logo: **idea 10, "Wordmark"**: the name with its o drawn as a small screen. The Home board above is redrawn to layout 3 in Plan step 15.
+`LayoutsAndLogos.html` (rendered: https://claude.ai/artifact/UkeKg4KL8xAaLxUiuEjudD) holds 10 main-window layouts and 10 logo ideas. Sher chose **layout 3, "Address bar"**: partner ID, password and Connect in one line at the top; this PC's ID and one-time password below on the left, Recent on the right. Logo: **idea 10, "Wordmark"**: the name with its o drawn as a small screen. The app's home window (Plan step 15a) is layout 3 drawn in the Home board's style, without the one-time password (dropped 4 Nov; PRD decision 5 Nov); the Home board itself still shows the older layout.
 
 ## Style
 

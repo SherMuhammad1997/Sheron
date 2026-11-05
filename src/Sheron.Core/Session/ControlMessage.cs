@@ -31,6 +31,9 @@ public enum ControlType : byte
     ClockProbe = 13,
     ClockReply = 14,
     LinkReport = 15,
+
+    /// <summary>Either way: this side ended the session (Disconnect; Plan step 15a). Handled inside the link.</summary>
+    Bye = 16,
 }
 
 /// <summary>
@@ -47,8 +50,34 @@ public readonly record struct LinkReport(uint PacketsExpected, uint PacketsRecei
     public double? FrameLoss => FramesReceived + FramesLost == 0 ? null : (double)FramesLost / (FramesReceived + FramesLost);
 }
 
-/// <summary>The remote PC's answer to an access request: the result, tries left before the lock, and seconds (time to answer, or lock left).</summary>
-public readonly record struct AccessAnswer(Security.AccessResult Result, int TriesLeft, int Seconds);
+/// <summary>
+/// The remote PC's answer to an access request: the result, tries left before the lock, and seconds (time to answer,
+/// or lock left); with Let in, the remote PC's name (Plan step 15a).
+/// </summary>
+public readonly record struct AccessAnswer(Security.AccessResult Result, int TriesLeft, int Seconds, string? Name = null);
+
+/// <summary>A PC's name as others see it (TRD › Windows UI › PC name): at most 32 characters and 64 bytes, no control characters.</summary>
+public static class PcName
+{
+    public const int MaxLength = 32;
+    public const int MaxBytes = 64;
+
+    public static string Clean(string? name)
+    {
+        var text = new string((name ?? "").Where(c => !char.IsControl(c)).ToArray()).Trim();
+        var elements = System.Globalization.StringInfo.GetTextElementEnumerator(text);
+        var kept = new StringBuilder();
+        int count = 0;
+        while (elements.MoveNext() && count < MaxLength)
+        {
+            string element = elements.GetTextElement();
+            if (Encoding.UTF8.GetByteCount(kept.ToString()) + Encoding.UTF8.GetByteCount(element) > MaxBytes) break;
+            kept.Append(element);
+            count++;
+        }
+        return kept.ToString().Trim();
+    }
+}
 
 /// <summary>Control messages that go over the reliable channel: building them, and reading them back with checks.</summary>
 public static class ControlMessage
@@ -152,52 +181,82 @@ public static class ControlMessage
         return true;
     }
 
+    private static readonly UTF8Encoding StrictUtf8 = new(false, throwOnInvalidBytes: true);
+
     /// <summary>
-    /// Access request: the password in UTF-8 after a 1-byte length; empty asks the person (Plan step 16b). Secret: never
-    /// log it.
+    /// Access request: the password in UTF-8 after a 1-byte length; empty asks the person (Plan step 16b). Then the
+    /// viewer's PC name the same way (Plan step 15a). Secret: never log it.
     /// </summary>
-    public static byte[] AccessRequest(string password)
+    public static byte[] AccessRequest(string password, string name = "")
     {
         byte[] text = Encoding.UTF8.GetBytes(password);
         if (text.Length > byte.MaxValue) throw new ArgumentException("A password is at most 255 bytes in UTF-8.", nameof(password));
-        return [(byte)ControlType.AccessRequest, (byte)text.Length, .. text];
+        byte[] pcName = Encoding.UTF8.GetBytes(PcName.Clean(name));
+        return [(byte)ControlType.AccessRequest, (byte)text.Length, .. text, (byte)pcName.Length, .. pcName];
     }
 
-    public static bool TryReadAccessRequest(ReadOnlySpan<byte> message, out string password)
+    public static bool TryReadAccessRequest(ReadOnlySpan<byte> message, out string password) =>
+        TryReadAccessRequest(message, out password, out _);
+
+    /// <summary>Reads the password and the viewer's name (empty when the viewer sent none).</summary>
+    public static bool TryReadAccessRequest(ReadOnlySpan<byte> message, out string password, out string name)
     {
-        password = "";
-        if (message.Length < 2 || message[0] != (byte)ControlType.AccessRequest || message.Length != 2 + message[1])
-            return false;
+        password = name = "";
+        if (message.Length < 2 || message[0] != (byte)ControlType.AccessRequest || message.Length < 2 + message[1]) return false;
+        var rest = message[(2 + message[1])..];
+        // Before Plan step 15a the request ended after the password.
+        if (rest.Length > 0 && (rest.Length != 1 + rest[0] || rest[0] > PcName.MaxBytes)) return false;
         try
         {
-            password = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(message[2..]);
+            password = StrictUtf8.GetString(message.Slice(2, message[1]));
+            if (rest.Length > 0) name = PcName.Clean(StrictUtf8.GetString(rest[1..]));
             return true;
         }
         catch (DecoderFallbackException)
         {
+            password = name = "";
             return false;
         }
     }
 
     public static byte[] Answer(AccessAnswer answer)
     {
-        var message = new byte[5];
+        byte[] name = answer.Result == Security.AccessResult.LetIn ? Encoding.UTF8.GetBytes(PcName.Clean(answer.Name)) : [];
+        var message = new byte[6 + name.Length];
         message[0] = (byte)ControlType.AccessAnswer;
         message[1] = (byte)answer.Result;
         message[2] = (byte)Math.Clamp(answer.TriesLeft, 0, byte.MaxValue);
         BinaryPrimitives.WriteUInt16LittleEndian(message.AsSpan(3), (ushort)Math.Clamp(answer.Seconds, 0, ushort.MaxValue));
+        message[5] = (byte)name.Length;
+        name.CopyTo(message, 6);
         return message;
     }
 
     public static bool TryReadAnswer(ReadOnlySpan<byte> message, out AccessAnswer answer)
     {
         answer = default;
-        if (message.Length != 5 || message[0] != (byte)ControlType.AccessAnswer) return false;
+        // 5 bytes before Plan step 15a; then a name length and the name.
+        if (message.Length < 5 || message[0] != (byte)ControlType.AccessAnswer) return false;
+        if (message.Length > 5 && (message.Length != 6 + message[5] || message[5] > PcName.MaxBytes)) return false;
         var result = (Security.AccessResult)message[1];
         if (!Enum.IsDefined(result)) return false;
-        answer = new AccessAnswer(result, message[2], BinaryPrimitives.ReadUInt16LittleEndian(message[3..]));
+        string? name = null;
+        if (message.Length > 6 && result == Security.AccessResult.LetIn)
+        {
+            try
+            {
+                name = PcName.Clean(StrictUtf8.GetString(message[6..]));
+            }
+            catch (DecoderFallbackException)
+            {
+                return false;
+            }
+        }
+        answer = new AccessAnswer(result, message[2], BinaryPrimitives.ReadUInt16LittleEndian(message[3..]), name);
         return true;
     }
+
+    public static byte[] Bye() => [(byte)ControlType.Bye];
 
     public static byte[] ClockProbe(long viewerMicros)
     {
