@@ -230,6 +230,9 @@ internal sealed class HomeForm : PaintedForm
             : ("Waiting for the server", Theme.Edge);
         Draw.Dot(g, new Point(left + Px(4), panel.Top + Px(236)), Px(8), dot);
         Draw.Text(g, state, Sans(15), new Rectangle(left + Px(18), panel.Top + Px(222), width - Px(18), Px(28)), Theme.Soft);
+        // Why there is no ID yet: what the server link last said.
+        if (_pc.Problem is null && _pc.Server != ServerState.Online && !_pc.IsShared && !_pc.IsViewing)
+            Draw.Text(g, _pc.ServerDetail, Sans(13), new Rectangle(left + Px(18), panel.Top + Px(254), width - Px(18), Px(40)), Theme.Muted, Draw.Wrapped);
 
         int lineY = panel.Bottom - Px(72);
         using (var line = new Pen(Theme.Line)) g.DrawLine(line, left, lineY, left + width, lineY);

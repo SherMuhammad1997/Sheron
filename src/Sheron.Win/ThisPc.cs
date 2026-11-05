@@ -36,6 +36,9 @@ internal enum ServerState
 /// </summary>
 internal sealed class ThisPc : IDisposable
 {
+    /// <summary>How long registering may take before it is given up and tried again.</summary>
+    private static readonly TimeSpan RegisterTimeout = TimeSpan.FromSeconds(15);
+
     private readonly SynchronizationContext _ui;
     private readonly bool _allowHardwareEncoder;
     private readonly CancellationTokenSource _closing = new();
@@ -186,16 +189,22 @@ internal sealed class ThisPc : IDisposable
     /// </summary>
     private async Task KeepRegistered(DeviceKey key, PacketMux mux)
     {
+        // Why the last try failed: shown on the home while the next one runs, so "Connecting" always says why.
+        string? failure = null;
         while (!_closing.IsCancellationRequested)
         {
             RendezvousClient? client = null;
             HostRendezvous? rendezvous = null;
             try
             {
-                SetServer(ServerState.Connecting, $"connecting to {ServerConfig.Host} …");
+                SetServer(ServerState.Connecting, failure is null ? $"connecting to {ServerConfig.Host} …" : $"{failure} · trying again …");
                 var lan = LocalNetwork.IPv4Addresses()
                     .Select(ip => new PeerAddress(AddressKind.Lan, new IPEndPoint(ip, _udp!.LocalEndPoint.Port))).ToList();
-                client = await RendezvousClient.ConnectAsync(ServerConfig.Host, ServerConfig.Port, ServerConfig.Pin, key, lan, _closing.Token);
+                using (var registering = CancellationTokenSource.CreateLinkedTokenSource(_closing.Token))
+                {
+                    registering.CancelAfter(RegisterTimeout);
+                    client = await RendezvousClient.ConnectAsync(ServerConfig.Host, ServerConfig.Port, ServerConfig.Pin, key, lan, registering.Token);
+                }
                 _closing.Token.ThrowIfCancellationRequested();
                 var gone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 client.Disconnected += () => gone.TrySetResult();
@@ -205,24 +214,34 @@ internal sealed class ThisPc : IDisposable
                 _rendezvous = rendezvous;
                 if (_viewing || _shared) await client.SetBusyAsync(true, _closing.Token);
                 bool udp = await rendezvous.CheckAddressAsync(_closing.Token);
+                failure = null;
                 SetServer(ServerState.Online, udp
                     ? $"registered · UDP works, seen as {rendezvous.Connector.PublicUdp}"
                     : "registered · UDP blocked here: viewers come over TCP 443");
                 await gone.Task.WaitAsync(_closing.Token);
-                SetServer(ServerState.Offline, "link to the server lost · trying again in 10 s");
+                failure = "the link to the server was lost";
             }
             catch (AuthenticationException)
             {
                 SetServer(ServerState.WrongServer, "the server's pin does not match: not our server");
                 return;
             }
-            catch (Exception error) when (error is SocketException or IOException or InvalidDataException)
-            {
-                SetServer(ServerState.Offline, $"cannot reach the server ({error.Message}) · trying again in 10 s");
-            }
-            catch (Exception error) when (error is OperationCanceledException or ObjectDisposedException)
+            catch (Exception error) when ((error is OperationCanceledException or ObjectDisposedException) && _closing.IsCancellationRequested)
             {
                 return;   // closing
+            }
+            catch (Exception error) when (error is SocketException or IOException or InvalidDataException)
+            {
+                failure = $"cannot reach the server ({error.Message})";
+            }
+            catch (OperationCanceledException)
+            {
+                failure = $"the server did not answer within {RegisterTimeout.TotalSeconds:0} s";
+            }
+            catch (Exception error)
+            {
+                // Whatever went wrong, the home says it and tries again: it never stays on "Connecting".
+                failure = $"{error.GetType().Name}: {error.Message}";
             }
             finally
             {
@@ -231,6 +250,7 @@ internal sealed class ThisPc : IDisposable
                 rendezvous?.Dispose();
                 if (client is not null) await client.DisposeAsync();
             }
+            SetServer(ServerState.Offline, $"{failure} · trying again in 10 s");
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(10), _closing.Token);
