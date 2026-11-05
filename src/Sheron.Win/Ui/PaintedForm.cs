@@ -45,10 +45,8 @@ internal abstract class PaintedForm : Form
     protected PaintedForm()
     {
         Fonts.Load();
-        // Sizes are at 96 DPI: each window sets its client size between SuspendLayout and ResumeLayout, which scales it
-        // to the screen's DPI once.
-        AutoScaleDimensions = new SizeF(96f, 96f);
-        AutoScaleMode = AutoScaleMode.Dpi;
+        // DPI scaling is not set here: setting it lays the window out at once, before the window's own fields exist
+        // (troubleshooting 2026-11-05). Each window calls SizeAt96 at the end of its constructor instead.
         BackColor = Theme.Background;
         ForeColor = Theme.Ink;
         Text = AppInfo.Name;
@@ -57,6 +55,19 @@ internal abstract class PaintedForm : Form
     }
 
     protected List<PaintedButton> Buttons { get; } = [];
+
+    /// <summary>
+    /// The client size at 96 DPI, scaled once to the screen's DPI (TRD › Windows UI › DPI). Call it last in the window's
+    /// constructor, when everything its layout uses is made.
+    /// </summary>
+    protected void SizeAt96(int width, int height)
+    {
+        SuspendLayout();
+        AutoScaleDimensions = new SizeF(96f, 96f);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        ClientSize = new Size(width, height);
+        ResumeLayout(false);
+    }
 
     /// <summary>A length at 96 DPI in this window's pixels.</summary>
     protected int Px(int logical) => LogicalToDeviceUnits(logical);

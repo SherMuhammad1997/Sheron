@@ -14,6 +14,12 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-11-05 — New app closed at once with no message  (Plan step 15a)
+Symptom:     Double-clicking `Sheron_new.exe` showed nothing. The Application log had ".NET Runtime: System.NullReferenceException at Sheron.Win.HomeForm.OnLayout … at ContainerControl.set_AutoScaleDimensions … at Sheron.Win.Ui.PaintedForm..ctor()" and "Application Error … 0xc0000005".
+Root cause:  The new windows' base class set the DPI scaling (`AutoScaleDimensions`) in its own constructor. Setting it lays the window out at once, and that calls the home window's layout before the home window's constructor has made its Connect button, so the layout read a field that was still null. The Linux build cannot run WinForms, so it was first run on Sher's PC.
+Exact fix:   The base class no longer sets the scaling; each window calls `SizeAt96(width, height)` as the last step of its constructor (scaling and client size in one SuspendLayout/ResumeLayout block, as the developer windows always did). The layout methods of the home and request windows also return early if their parts are not made yet. The Windows test `The_home_window_shows_the_product_name` builds the home window and catches this on Sher's PC.
+Files:       `src/Sheron.Win/Ui/PaintedForm.cs`, `src/Sheron.Win/HomeForm.cs`, `src/Sheron.Win/RequestForm.cs`
+
 ### 2026-11-05 — A viewer window on the sharing PC knocked the sharing window off the server  (Plan step 15a)
 Symptom:     With the sharing window open, opening a viewer window on the same PC registered the PC a second time; the server kept only the newer link, so the sharing window lost its registration (and took it back 10 s later, dropping the viewer's). The two could not be open together (TRD › Connect by ID, before 15a).
 Root cause:  The server allows one connection per device key, and each window had its own registration and its own UDP socket. Two sockets also gave the server two public addresses for one PC.

@@ -59,7 +59,6 @@ internal sealed class HomeForm : PaintedForm
         }
 
         SuspendLayout();
-        ClientSize = new Size(880, 680);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -80,6 +79,7 @@ internal sealed class HomeForm : PaintedForm
         }
         OnFontsChanged();
         ResumeLayout(false);
+        SizeAt96(880, 680);
 
         _pc.Changed += OnPcChanged;
         _pc.ConsentNeeded += ShowRequest;
@@ -126,6 +126,7 @@ internal sealed class HomeForm : PaintedForm
     protected override void OnLayout(LayoutEventArgs e)
     {
         base.OnLayout(e);
+        if (_connect is null) return;   // not made yet: Windows may lay out a window while it is being built
         Place(_partner, PartnerFrame);
         Place(_password, PasswordFrame);
         _connect.Bounds = Px(692, 104, 148, 56);

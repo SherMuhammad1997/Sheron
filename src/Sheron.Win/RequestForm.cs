@@ -20,8 +20,9 @@ internal sealed class RequestForm : PaintedForm
     {
         _request = request;
         _where = where;
+        Buttons.Add(new PaintedButton(ButtonLook.Primary, "Accept", () => Answer(accept: true)));
+        Buttons.Add(new PaintedButton(ButtonLook.Outline, "Deny", () => Answer(accept: false)));
         SuspendLayout();
-        ClientSize = new Size(400, 252);
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.CenterScreen;
         TopMost = true;
@@ -29,8 +30,7 @@ internal sealed class RequestForm : PaintedForm
         Text = $"Sheron — {Who} wants to control this PC";
         KeyPreview = true;
         ResumeLayout(false);
-        Buttons.Add(new PaintedButton(ButtonLook.Primary, "Accept", () => Answer(accept: true)));
-        Buttons.Add(new PaintedButton(ButtonLook.Outline, "Deny", () => Answer(accept: false)));
+        SizeAt96(400, 252);
         _tick.Tick += (_, _) =>
         {
             if (_request.TimeLeft <= TimeSpan.Zero) Close();
@@ -63,6 +63,7 @@ internal sealed class RequestForm : PaintedForm
     protected override void OnLayout(LayoutEventArgs e)
     {
         base.OnLayout(e);
+        if (Buttons.Count < 2) return;   // not made yet
         Buttons[0].Bounds = Px(24, 144, 170, 44);
         Buttons[1].Bounds = Px(206, 144, 170, 44);
         Buttons[0].Font = Sans(15, Weight.Bold);
