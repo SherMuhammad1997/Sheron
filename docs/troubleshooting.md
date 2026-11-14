@@ -14,6 +14,12 @@ Files:       paths changed (repo, Windows setting, server setting)
 
 ## Entries
 
+### 2026-11-14 — Home window stayed on "Connecting to the server …"  (Plan step 15a)
+Symptom:     The new home window (and the developer sharing window) never showed an ID; the server line stayed on "connecting to 168.138.174.180 …". In the browser, cloud.oracle.com timed out or loaded only its top bar, while Google worked. `ping` to the server always times out.
+Root cause:  Two things. (1) Sher's internet (iPhone hotspot) reached Oracle's network in Singapore only now and then: `curl` to the server and to cloud.oracle.com timed out, a TCP test sometimes passed, and a connection that did open took 2.3 s. The server itself was running. (2) The app gave registration no time limit, so a handshake that stalled left it on "Connecting" for ever, with no reason shown. Ping proves nothing: Oracle's security list does not let ping in.
+Exact fix:   App: registration gives up after 15 s and tries again every 10 s, on any error, and the home window shows the reason under "Waiting for the server". To check the route from a PC, use the port test `Test-NetConnection 168.138.174.180 -Port 443`, then the full-handshake test in PowerShell (TcpClient + SslStream, read the 36-byte challenge; it registers nothing). When both pass, Sheron goes Online (ID 1920 on 14 Nov). When they fail, use another internet connection.
+Files:       `src/Sheron.Win/ThisPc.cs`, `src/Sheron.Win/HomeForm.cs`
+
 ### 2026-11-05 — New app closed at once with no message  (Plan step 15a)
 Symptom:     Double-clicking `Sheron_new.exe` showed nothing. The Application log had ".NET Runtime: System.NullReferenceException at Sheron.Win.HomeForm.OnLayout … at ContainerControl.set_AutoScaleDimensions … at Sheron.Win.Ui.PaintedForm..ctor()" and "Application Error … 0xc0000005".
 Root cause:  The new windows' base class set the DPI scaling (`AutoScaleDimensions`) in its own constructor. Setting it lays the window out at once, and that calls the home window's layout before the home window's constructor has made its Connect button, so the layout read a field that was still null. The Linux build cannot run WinForms, so it was first run on Sher's PC.
